@@ -50,17 +50,16 @@ ia-company-manager/
 │   ├── marketing.md
 │   └── auditoria.md
 │
-├── vault/                    # 🔒 Repo git PRIVADO independiente (ia-company-manager-vault)
-│   ├── 0-raw/                  # Bandeja de entrada de notas crudas (se vacía tras ingest.js)
-│   ├── 1-desk/                  # Resumen de cada corrida del worker (salida temporal/auditoría)
-│   ├── 2-atoms/                   # Notas atómicas — una idea por archivo, con [[wikilinks]]
-│   ├── 3-threads/                  # Documentos vivos por proyecto, síntesis de clusters de átomos
-│   └── sources/                     # Fuentes reales por proyecto — solo lectura, nunca se editan
-│
-└── briefings/                        # Reportes diarios/de auditoría (editores, auditoria)
+└── vault/                    # 🔒 Repo git PRIVADO independiente (ia-company-manager-vault)
+    ├── 0-raw/                  # Bandeja de entrada de notas crudas (se vacía tras ingest.js)
+    ├── 1-desk/                  # Resumen de cada corrida del worker (salida temporal/auditoría)
+    ├── 2-atoms/                   # Notas atómicas — una idea por archivo, con [[wikilinks]]
+    ├── 3-threads/                  # Documentos vivos por proyecto, síntesis de clusters de átomos
+    ├── sources/                     # Fuentes reales por proyecto — solo lectura, nunca se editan
+    └── briefings/                     # Reportes diarios/de auditoría (editores, auditoria)
 ```
 
-> `sources/` vive **dentro** de `vault/` (no en la raíz) para que un único repo privado respalde todo el material confidencial del sistema.
+> `sources/` y `briefings/` viven **dentro** de `vault/` (no en la raíz) para que un único repo privado respalde todo el material confidencial del sistema — incluidos los reportes de auditoría, que pueden contener análisis de negocio real (precios, decisiones) de un proyecto.
 
 ---
 
@@ -83,10 +82,10 @@ write_paths: vault/2-atoms, vault/1-desk    # únicas rutas donde este agente pu
 | `catalogadores` | Convierte fuentes en notas atómicas (una idea por archivo) | `vault/2-atoms/`, `vault/1-desk/` |
 | `cartografos` | Enlaza notas atómicas relacionadas con `[[wikilinks]]` | `vault/2-atoms/`, `vault/1-desk/` |
 | `criticos` | Detecta contradicciones entre notas, marca `[FRICTION]`, nunca resuelve solo | `vault/2-atoms/`, `vault/1-desk/` |
-| `editores` | Sintetiza clusters de átomos en threads por proyecto + briefing diario | `vault/3-threads/`, `briefings/`, `vault/1-desk/` |
+| `editores` | Sintetiza clusters de átomos en threads por proyecto + briefing diario | `vault/3-threads/`, `vault/briefings/`, `vault/1-desk/` |
 | `programadores` | Construye/mantiene código, siempre en staging, nunca deploy sin aprobación | `vault/1-desk/` |
 | `marketing` | Redacta borradores de cara afuera basados solo en `vault/3-threads/`, deja en cola de aprobación | `vault/1-desk/` |
-| `auditoria` | Barrido periódico del vault (huérfanas, `[FRICTION]` sin resolver, notas sin fuente); reporte dual (briefing + notifica al asistente principal) | `briefings/` |
+| `auditoria` | Barrido periódico del vault (huérfanas, `[FRICTION]` sin resolver, notas sin fuente); reporte dual (briefing + notifica al asistente principal) | `vault/briefings/` |
 
 **Nota sobre `temperature`:** `claude-sonnet-5` ya no acepta ese parámetro en la API (la rechaza con 400). El valor en el frontmatter se usa como *clasificación* — si es mayor a 0, `worker.js` inyecta una instrucción de prompt pidiendo voz propia y variación, en vez de un parámetro numérico de sampling.
 

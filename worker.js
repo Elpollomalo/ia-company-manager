@@ -218,11 +218,17 @@ const worker = new Worker('cola-de-agentes', async (job) => {
 
         ultimaRespuesta = await anthropic.messages.create({
             model: 'claude-sonnet-5',
-            max_tokens: 4000,
+            max_tokens: 16000,
             system: systemPrompt,
             tools: herramientas,
             messages,
         });
+
+        console.log(`↳ [${agente}] turno ${turnos} — stop_reason: ${ultimaRespuesta.stop_reason}`);
+
+        if (ultimaRespuesta.stop_reason === 'max_tokens') {
+            console.warn(`⚠️ [${agente}] se quedó sin tokens de salida a media respuesta (turno ${turnos}). Es probable que haya perdido una escritura o entregable en curso.`);
+        }
 
         if (ultimaRespuesta.stop_reason !== 'tool_use') {
             break;
@@ -270,7 +276,11 @@ const worker = new Worker('cola-de-agentes', async (job) => {
     const nombreArchivoSalida = `${agente}_${proyecto.toLowerCase()}_${job.id}.md`;
     const rutaSalida = path.join(__dirname, 'vault', '1-desk', nombreArchivoSalida);
 
-    const contenidoSalida = `# Corrida de ${agente} — ${proyecto}\n\n## Respuesta final\n${resultadoIA}\n\n## Herramientas invocadas\n${bitacoraTexto}\n`;
+    const avisoIncompleta = ultimaRespuesta.stop_reason === 'max_tokens'
+        ? `\n\n⚠️ **Corrida posiblemente incompleta**: se quedó sin tokens de salida a media respuesta (stop_reason: max_tokens). Puede que haya perdido un write_file en curso.\n`
+        : '';
+
+    const contenidoSalida = `# Corrida de ${agente} — ${proyecto}\n\n## Respuesta final${avisoIncompleta}\n${resultadoIA}\n\n## Herramientas invocadas\n${bitacoraTexto}\n`;
 
     fs.mkdirSync(path.dirname(rutaSalida), { recursive: true });
     fs.writeFileSync(rutaSalida, contenidoSalida, 'utf-8');

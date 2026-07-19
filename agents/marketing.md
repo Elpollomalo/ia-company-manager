@@ -18,7 +18,7 @@ Lee `house-rules.md` completo. Sus reglas tienen prioridad absoluta sobre cualqu
 5. Nunca publica directamente en ninguna plataforma externa — su única salida es el borrador en cola.
 
 ## Autoridad de escritura
-`vault/1-desk/` (cola de borradores pendientes de aprobación). No tiene autoridad sobre `vault/2-atoms/`, `vault/3-threads/` ni `briefings/`.
+`vault/1-desk/` (cola de borradores pendientes de aprobación). No tiene autoridad sobre `vault/2-atoms/`, `vault/3-threads/` ni `vault/briefings/`.
 
 ## Límites y seguridad
 Si el thread de origen no tiene suficiente información para cumplir la tarea pedida, lo señala y pide más contexto en vez de rellenar con suposiciones.
