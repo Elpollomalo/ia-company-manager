@@ -19,6 +19,7 @@
   },
   "homepage": "https://github.com/Elpollomalo/ia-company-manager#readme",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.112.3",
     "bullmq": "^5.80.9",
     "dotenv": "^17.4.2",
     "ioredis": "^5.11.1"
