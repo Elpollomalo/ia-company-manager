@@ -17,5 +17,10 @@
   "bugs": {
     "url": "https://github.com/Elpollomalo/ia-company-manager/issues"
   },
-  "homepage": "https://github.com/Elpollomalo/ia-company-manager#readme"
+  "homepage": "https://github.com/Elpollomalo/ia-company-manager#readme",
+  "dependencies": {
+    "bullmq": "^5.80.9",
+    "dotenv": "^17.4.2",
+    "ioredis": "^5.11.1"
+  }
 }
