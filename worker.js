@@ -1,6 +1,7 @@
 const { Worker } = require('bullmq');
 const { connection } = require('./config');
 const Anthropic = require('@anthropic-ai/sdk');
+const { Client } = require('pg');
 const fs = require('fs');
 const path = require('path');
 require('dotenv').config();
@@ -54,6 +55,41 @@ const TOOLS = [
     },
 ];
 
+// Herramienta opcional: solo se ofrece a agentes cuyo playbook declare `db_access: true`.
+const SQL_TOOL = {
+    name: 'run_sql',
+    description: 'Ejecuta una sentencia SQL real contra la base de datos de staging configurada (SUPABASE_DB_URL). Sentencias destructivas (DROP, DELETE, ALTER, TRUNCATE) son rechazadas automáticamente por el sistema y requieren aprobación humana explícita fuera de este flujo.',
+    input_schema: {
+        type: 'object',
+        properties: {
+            sql: { type: 'string', description: 'La sentencia SQL exacta a ejecutar.' },
+        },
+        required: ['sql'],
+    },
+};
+
+const SQL_DESTRUCTIVO = /\b(DROP|DELETE|TRUNCATE|ALTER)\b/i;
+
+async function ejecutarSQL(sql) {
+    if (!process.env.SUPABASE_DB_URL) {
+        return 'RECHAZADO: no hay SUPABASE_DB_URL configurada en el entorno.';
+    }
+    if (SQL_DESTRUCTIVO.test(sql)) {
+        return 'RECHAZADO: esta sentencia contiene una operación destructiva (DROP/DELETE/TRUNCATE/ALTER). Requiere aprobación humana explícita fuera de este flujo automático — repórtala en tu respuesta final en vez de ejecutarla.';
+    }
+    const client = new Client({ connectionString: process.env.SUPABASE_DB_URL, ssl: { rejectUnauthorized: false } });
+    try {
+        await client.connect();
+        const resultado = await client.query(sql);
+        const filas = resultado.rows && resultado.rows.length ? JSON.stringify(resultado.rows).slice(0, 1000) : '';
+        return `OK. Filas afectadas/devueltas: ${resultado.rowCount ?? 0}. ${filas}`;
+    } catch (err) {
+        return `ERROR SQL: ${err.message}`;
+    } finally {
+        await client.end().catch(() => {});
+    }
+}
+
 function resolverRutaSegura(rutaRelativa) {
     const rutaAbsoluta = path.resolve(PROJECT_ROOT, rutaRelativa);
     if (rutaAbsoluta !== PROJECT_ROOT && !rutaAbsoluta.startsWith(PROJECT_ROOT + path.sep)) {
@@ -67,7 +103,7 @@ function rutaEstaAutorizada(rutaRelativa, writePaths) {
     return writePaths.some((base) => normalizada === base || normalizada.startsWith(`${base}/`));
 }
 
-function ejecutarTool(nombre, input, writePaths) {
+async function ejecutarTool(nombre, input, writePaths, dbAccess) {
     switch (nombre) {
         case 'list_files': {
             const rutaAbs = resolverRutaSegura(input.ruta);
@@ -89,6 +125,12 @@ function ejecutarTool(nombre, input, writePaths) {
             fs.mkdirSync(path.dirname(rutaAbs), { recursive: true });
             fs.writeFileSync(rutaAbs, input.contenido, 'utf-8');
             return `Archivo guardado en '${input.ruta}' (${input.contenido.length} caracteres).`;
+        }
+        case 'run_sql': {
+            if (!dbAccess) {
+                return 'RECHAZADO: este agente no tiene autoridad para ejecutar SQL (falta db_access: true en su playbook).';
+            }
+            return await ejecutarSQL(input.sql);
         }
         default:
             return `Herramienta desconocida: ${nombre}`;
@@ -122,6 +164,9 @@ const worker = new Worker('cola-de-agentes', async (job) => {
         writePaths = matchWritePaths[1].split(',').map((p) => p.trim().replace(/\/+$/, ''));
     }
 
+    const dbAccess = /db_access:\s*true/i.test(playbookContenido);
+    const herramientas = dbAccess ? [...TOOLS, SQL_TOOL] : TOOLS;
+
     let proyectoContexto = "No hay archivos de contexto específicos en vault/sources/ todavía.";
     if (fs.existsSync(sourcesDir)) {
         const archivosContexto = fs.readdirSync(sourcesDir).filter((f) => f.endsWith('.md') || f.endsWith('.txt'));
@@ -140,12 +185,16 @@ const worker = new Worker('cola-de-agentes', async (job) => {
         ? '\n\nEste rol requiere voz propia: varía tu redacción y estructura, evita sonar robótico o repetitivo. No sacrifiques la fidelidad a las fuentes por creatividad.'
         : '';
 
-    console.log(`🧠 Invocando a Claude usando el rol de ${agente} (modo ${modoCreativo ? 'creativo' : 'preciso'}, escritura: ${writePaths.join(', ') || 'ninguna'}) para el proyecto ${proyecto}...`);
+    console.log(`🧠 Invocando a Claude usando el rol de ${agente} (modo ${modoCreativo ? 'creativo' : 'preciso'}, escritura: ${writePaths.join(', ') || 'ninguna'}, db_access: ${dbAccess}) para el proyecto ${proyecto}...`);
+
+    const instruccionSQL = dbAccess
+        ? '\n\nTambién tienes acceso a run_sql para ejecutar SQL real contra la base de datos de staging. Sentencias destructivas (DROP/DELETE/ALTER/TRUNCATE) son rechazadas automáticamente por el sistema; si necesitas una, repórtala en tu respuesta final para que un humano la revise, no intentes forzarla.'
+        : '';
 
     const systemPrompt = `Eres un agente de IA especializado que forma parte de una organización virtual.
         Debes actuar estrictamente bajo los siguientes estatutos y playbooks.
         Tienes acceso a herramientas (list_files, read_file, write_file) para operar sobre el filesystem real del vault. Úsalas para cumplir tu misión: no te limites a describir lo que harías, hazlo.
-        write_file solo funciona dentro de tus rutas autorizadas: ${writePaths.join(', ') || 'ninguna'}. Cualquier intento fuera de esas rutas será rechazado automáticamente.${instruccionVoz}
+        write_file solo funciona dentro de tus rutas autorizadas: ${writePaths.join(', ') || 'ninguna'}. Cualquier intento fuera de esas rutas será rechazado automáticamente.${instruccionVoz}${instruccionSQL}
 
         === ESTATUTOS DEL SISTEMA (HOUSE RULES) ===
         ${houseRules}
@@ -171,7 +220,7 @@ const worker = new Worker('cola-de-agentes', async (job) => {
             model: 'claude-sonnet-5',
             max_tokens: 4000,
             system: systemPrompt,
-            tools: TOOLS,
+            tools: herramientas,
             messages,
         });
 
@@ -189,7 +238,7 @@ const worker = new Worker('cola-de-agentes', async (job) => {
 
             let resultado;
             try {
-                resultado = ejecutarTool(bloque.name, bloque.input, writePaths);
+                resultado = await ejecutarTool(bloque.name, bloque.input, writePaths, dbAccess);
             } catch (err) {
                 resultado = `ERROR: ${err.message}`;
             }
