@@ -19,7 +19,7 @@ const worker = new Worker('cola-de-agentes', async (job) => {
 
     const playbookPath = path.join(__dirname, 'agents', `${agente}.md`);
     const houseRulesPath = path.join(__dirname, 'house-rules.md');
-    const sourcesPath = path.join(__dirname, 'vault', 'sources', `${proyecto.toLowerCase()}.md`);
+    const sourcesDir = path.join(__dirname, 'vault', 'sources', proyecto.toLowerCase());
 
     if (!fs.existsSync(playbookPath)) {
         throw new Error(`El playbook para el agente '${agente}' no existe.`);
@@ -34,9 +34,14 @@ const worker = new Worker('cola-de-agentes', async (job) => {
         temperaturaAgente = parseFloat(matchTemp[1]);
     }
 
-    let proyectoContexto = "No hay un archivo de contexto específico en sources/ todavía.";
-    if (fs.existsSync(sourcesPath)) {
-        proyectoContexto = fs.readFileSync(sourcesPath, 'utf-8');
+    let proyectoContexto = "No hay archivos de contexto específicos en vault/sources/ todavía.";
+    if (fs.existsSync(sourcesDir)) {
+        const archivosContexto = fs.readdirSync(sourcesDir).filter(f => f.endsWith('.md') || f.endsWith('.txt'));
+        if (archivosContexto.length > 0) {
+            proyectoContexto = archivosContexto
+                .map(f => `--- ${f} ---\n${fs.readFileSync(path.join(sourcesDir, f), 'utf-8')}`)
+                .join('\n\n');
+        }
     }
 
     console.log(`🧠 Invocando a Claude usando el rol de ${agente} (temperatura ${temperaturaAgente}) para el proyecto ${proyecto}...`);
