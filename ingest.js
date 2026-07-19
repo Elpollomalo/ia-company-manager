@@ -21,26 +21,36 @@ async function ejecutarIngesta() {
 
         for (const archivo of archivos) {
             const rutaArchivo = path.join(RAW_DIR, archivo);
-            const contenido = fs.readFileSync(rutaArchivo, 'utf-8');
 
             console.log(`📦 Procesando archivo: ${archivo}`);
 
-            let proyectoDetectado = 'General';
+            // "proyecto" es siempre el slug real de la carpeta en vault/sources/ — nunca un
+            // nombre "bonito" — para que no exista ningún punto de la cadena (aquí, worker.js,
+            // trigger.js) donde proyecto.toLowerCase() deje de coincidir con la carpeta real.
+            let proyectoDetectado = 'general';
             const nombreMinusculas = archivo.toLowerCase();
 
-            if (nombreMinusculas.includes('tourbrain')) proyectoDetectado = 'TourBrain';
-            else if (nombreMinusculas.includes('gnga')) proyectoDetectado = 'GNGA.WEB3';
-            else if (nombreMinusculas.includes('balam')) proyectoDetectado = 'Creativa Balam';
-            else if (nombreMinusculas.includes('ideas')) proyectoDetectado = 'Agencia de Ideas';
+            if (nombreMinusculas.includes('tourbrain')) proyectoDetectado = 'tourbrain';
+            else if (nombreMinusculas.includes('gnga')) proyectoDetectado = 'gnga-web3';
+            else if (nombreMinusculas.includes('balam')) proyectoDetectado = 'creativa-balam';
+            else if (nombreMinusculas.includes('ideas')) proyectoDetectado = 'agencia-ideas';
+
+            // Movemos la fuente a vault/sources/ ANTES de encolar la tarea (no la borramos):
+            // catalogadores exige que toda nota tenga una fuente verificable en el vault
+            // ("sin fuente, no hay nota"), y ese archivo debe seguir existiendo cuando el
+            // worker la procese.
+            const proyectoSlug = proyectoDetectado;
+            const carpetaDestino = path.join(__dirname, 'vault', 'sources', proyectoSlug);
+            fs.mkdirSync(carpetaDestino, { recursive: true });
+            const rutaDestino = path.join(carpetaDestino, archivo);
+            fs.renameSync(rutaArchivo, rutaDestino);
+            console.log(`📚 Archivo origen '${archivo}' movido a vault/sources/${proyectoSlug}/ como fuente permanente.`);
 
             await agregarTarea(
                 'catalogadores',
                 proyectoDetectado,
-                `Toma esta nota cruda del archivo '${archivo}' y conviértela en una o varias notas atómicas limpias en la carpeta vault/2-atoms/. No inventes nada externo.\n\nContenido original:\n${contenido}`
+                `Toma la fuente 'vault/sources/${proyectoSlug}/${archivo}' y conviértela en una o varias notas atómicas limpias en la carpeta vault/2-atoms/. No inventes nada externo.`
             );
-
-            fs.unlinkSync(rutaArchivo);
-            console.log(`🗑️ Archivo origen '${archivo}' movido exitosamente al pipeline.`);
         }
 
         console.log("✅ Ingesta completada de forma segura. Todas las tareas están en la cola de Redis.");
