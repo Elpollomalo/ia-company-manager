@@ -1,6 +1,7 @@
 ---
 temperature: 0
 write_paths: vault/2-atoms, vault/1-desk
+provider: deepseek
 ---
 # 📥 Agente Catalogador
 

@@ -1,6 +1,7 @@
 ---
 temperature: 0.7
 write_paths: vault/3-threads, vault/briefings, vault/1-desk
+provider: deepseek
 ---
 # ✍️ Agente Editor
 

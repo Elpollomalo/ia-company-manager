@@ -1,6 +1,7 @@
 ---
 temperature: 0
 write_paths: vault/briefings
+provider: deepseek
 ---
 # 🛡️ Agente Auditoría
 

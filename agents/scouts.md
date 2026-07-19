@@ -1,6 +1,7 @@
 ---
 temperature: 0
 write_paths: vault/sources, vault/1-desk
+provider: deepseek
 ---
 # 🧭 Agente Scout (Explorador)
 
