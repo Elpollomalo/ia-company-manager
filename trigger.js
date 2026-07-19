@@ -5,7 +5,7 @@ async function dispararPrueba() {
 
     // Inyectamos una tarea real usando la estructura agnóstica
     await agregarTarea(
-        'programacion',      // Agente que requiere el playbook
+        'programadores',      // Agente que requiere el playbook
         'TourBrain',         // Proyecto activo
         'Diseñar la estructura base de datos para los bots de Cozumel' // Tarea específica
     );

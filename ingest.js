@@ -34,7 +34,7 @@ async function ejecutarIngesta() {
             else if (nombreMinusculas.includes('ideas')) proyectoDetectado = 'Agencia de Ideas';
 
             await agregarTarea(
-                'catalogador',
+                'catalogadores',
                 proyectoDetectado,
                 `Toma esta nota cruda del archivo '${archivo}' y conviértela en una o varias notas atómicas limpias en la carpeta vault/2-atoms/. No inventes nada externo.\n\nContenido original:\n${contenido}`
             );

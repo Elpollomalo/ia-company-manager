@@ -11,6 +11,8 @@ const anthropic = new Anthropic({
     apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
+const WORKER_CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY, 10) || 3;
+
 const worker = new Worker('cola-de-agentes', async (job) => {
     const { agente, proyecto, tarea, archivoOrigen } = job.data;
     console.log(`\n⚡ Procesando: Agente [${agente}] | Proyecto [${proyecto}]`);
@@ -24,19 +26,25 @@ const worker = new Worker('cola-de-agentes', async (job) => {
     }
 
     const houseRules = fs.readFileSync(houseRulesPath, 'utf-8');
-    const playbook = fs.readFileSync(playbookPath, 'utf-8');
+    const playbookContenido = fs.readFileSync(playbookPath, 'utf-8');
+    let temperaturaAgente = 0;
+
+    const matchTemp = playbookContenido.match(/temperature:\s*([\d.]+)/);
+    if (matchTemp) {
+        temperaturaAgente = parseFloat(matchTemp[1]);
+    }
 
     let proyectoContexto = "No hay un archivo de contexto específico en sources/ todavía.";
     if (fs.existsSync(sourcesPath)) {
         proyectoContexto = fs.readFileSync(sourcesPath, 'utf-8');
     }
 
-    console.log(`🧠 Invocando a Claude usando el rol de ${agente} para el proyecto ${proyecto}...`);
+    console.log(`🧠 Invocando a Claude usando el rol de ${agente} (temperatura ${temperaturaAgente}) para el proyecto ${proyecto}...`);
 
     const response = await anthropic.messages.create({
         model: "claude-sonnet-5",
         max_tokens: 4000,
-        temperature: 0, // Temperatura 0 para evitar alucinaciones y forzar respuestas precisas
+        temperature: temperaturaAgente,
         system: `Eres un agente de IA especializado que forma parte de una organización virtual.
         Debes actuar estrictamente bajo los siguientes estatutos y playbooks.
 
@@ -44,7 +52,7 @@ const worker = new Worker('cola-de-agentes', async (job) => {
         ${houseRules}
 
         === TU PLAYBOOK DE ROL ===
-        ${playbook}
+        ${playbookContenido}
 
         === CONTEXTO DEL PROYECTO ACTUAL ===
         ${proyectoContexto}`,
@@ -63,7 +71,7 @@ const worker = new Worker('cola-de-agentes', async (job) => {
     console.log(`💾 Resultado guardado en de forma temporal en: vault/1-desk/${nombreArchivoSalida}`);
 
     return { status: 'success', archivoGenerado: nombreArchivoSalida };
-}, { connection });
+}, { connection, concurrency: WORKER_CONCURRENCY });
 
 worker.on('completed', (job) => console.log(`✅ Tarea ${job.id} procesada con éxito por la IA.`));
 worker.on('failed', (job, err) => console.error(`❌ Tarea ${job.id} falló de forma crítica:`, err.message));
