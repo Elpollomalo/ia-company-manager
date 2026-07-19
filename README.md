@@ -56,7 +56,9 @@ ia-company-manager/
     ├── 2-atoms/                   # Notas atómicas — una idea por archivo, con [[wikilinks]]
     ├── 3-threads/                  # Documentos vivos por proyecto, síntesis de clusters de átomos
     ├── sources/                     # Fuentes reales por proyecto — solo lectura, nunca se editan
-    └── briefings/                     # Reportes diarios/de auditoría (editores, auditoria)
+    ├── briefings/                     # Reportes diarios/de auditoría (editores, auditoria)
+    └── estado-proyectos/               # Tablero de control humano: un archivo corto por proyecto
+                                            # (dónde vamos, qué falta que el humano haga/decida/pegue)
 ```
 
 > `sources/` y `briefings/` viven **dentro** de `vault/` (no en la raíz) para que un único repo privado respalde todo el material confidencial del sistema — incluidos los reportes de auditoría, que pueden contener análisis de negocio real (precios, decisiones) de un proyecto.
