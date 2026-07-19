@@ -36,7 +36,7 @@ const anthropic = new Anthropic({
 const DEEPSEEK_BASE_URL = 'https://api.deepseek.com';
 
 const WORKER_CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY, 10) || 3;
-const MAX_TURNOS_AGENTE = 15;
+const MAX_TURNOS_AGENTE = 30;
 const PROJECT_ROOT = __dirname;
 
 // DeepSeek habla el formato de function-calling de OpenAI, no el de Anthropic —
@@ -273,7 +273,7 @@ const worker = new Worker('cola-de-agentes', async (job) => {
                 },
                 body: JSON.stringify({
                     model: 'deepseek-chat',
-                    max_tokens: 8000,
+                    max_tokens: 16000,
                     messages: messagesDS,
                     tools: herramientasDS,
                 }),
