@@ -2,7 +2,6 @@
 temperature: 0
 write_paths: vault/1-desk
 db_access: true
-provider: deepseek
 ---
 # 💻 Agente Programador
 
