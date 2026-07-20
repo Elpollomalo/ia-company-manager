@@ -40,6 +40,14 @@ ia-company-manager/
 │
 ├── house-rules.md          # Estatuto del sistema — se inyecta en TODAS las llamadas a Claude
 │
+├── dify-datasets.json       # Mapa proyecto → dataset_id de Dify (no es secreto, solo un ID)
+├── scripts/
+│   ├── publish-to-dify.js     # Publica vault/4-bot-brain/{proyecto}/*.md al Knowledge Base de
+│   │                            # Dify del proyecto. Manual — lo dispara un humano después de
+│   │                            # revisar tono/contenido, no corre solo dentro del worker.
+│   └── dify-chat-check.js     # Prueba un bot de Dify con preguntas reales (Chat API), para
+│                                # que un humano revise las respuestas — no decide solo.
+│
 ├── agents/                  # Playbooks — un rol por archivo, con frontmatter de configuración
 │   ├── scouts.md
 │   ├── catalogadores.md
@@ -140,9 +148,24 @@ Variables de entorno (`.env`, nunca se sube — ya está en `.gitignore`):
 
 ```
 ANTHROPIC_API_KEY=sk-ant-...
+DEEPSEEK_API_KEY=sk-...     # requerido por cualquier agente con provider: deepseek en su playbook
 WORKER_CONCURRENCY=3       # opcional, default 3
 REDIS_HOST=127.0.0.1        # opcional, default 127.0.0.1
 REDIS_PORT=6379               # opcional, default 6379
+
+DIFY_API_KEY_GNGA_WEB3=dataset-...   # API key del Dataset de Dify (Knowledge → API Access,
+                                       # no la de una app) para el proyecto gnga-web3.
+                                       # <PROYECTO> = nombre del proyecto en mayúsculas,
+                                       # guiones/espacios → guión bajo (gnga-web3 → GNGA_WEB3)
+DIFY_API_KEY=dataset-...              # opcional: fallback genérico si no hay una key por
+                                        # proyecto (útil si todos los proyectos comparten cuenta)
+DIFY_BASE_URL=https://api.dify.ai/v1   # opcional, default. También acepta override por
+                                         # proyecto: DIFY_BASE_URL_<PROYECTO>
+
+DIFY_CHAT_API_KEY_GNGA_WEB3=app-...   # API key de la App/Chatflow de Dify (Chat Messages API,
+                                        # DISTINTA a la del Dataset) para probar el bot en vivo.
+                                        # Mismo patrón <PROYECTO> que las variables de arriba.
+DIFY_CHAT_API_KEY=app-...             # opcional: fallback genérico
 ```
 
 Requiere una instancia de Redis corriendo localmente (o accesible vía `REDIS_HOST`/`REDIS_PORT`).
@@ -154,3 +177,30 @@ node worker.js      # levanta el orquestador, queda escuchando la cola
 node ingest.js       # procesa notas nuevas en vault/0-raw/ y las encola
 node trigger.js       # dispara una tarea de prueba manual
 ```
+
+### Publicar contenido a un bot en Dify
+
+```bash
+node scripts/publish-to-dify.js <proyecto>   # ej: node scripts/publish-to-dify.js gnga-web3
+```
+
+Sube cada archivo `.md` de `vault/4-bot-brain/{proyecto}/` como documento al Dataset de Dify
+configurado para ese proyecto en `dify-datasets.json` (crea el documento si no existe,
+actualiza el contenido si ya existe). Requiere el `dataset_id` del proyecto ya cargado en
+`dify-datasets.json` (el Dataset se crea una vez a mano en la consola de Dify) y su API key en
+`.env` — cada proyecto puede tener la suya (`DIFY_API_KEY_<PROYECTO>`, por si vive en una
+cuenta/workspace de Dify distinta), con `DIFY_API_KEY` genérica como respaldo si no hay una
+específica. Es un paso **manual**, pensado para correr después de que un humano revisó tono y
+contenido — no está enganchado al pipeline automático del worker.
+
+### Probar un bot de Dify en vivo
+
+```bash
+node scripts/dify-chat-check.js <proyecto>                  # batería de preguntas de auditoría
+node scripts/dify-chat-check.js <proyecto> "<pregunta>"      # una sola pregunta puntual
+```
+
+Le manda preguntas reales a la Chat Messages API de Dify (la App/Chatflow del bot, no el
+Dataset) y muestra las respuestas tal cual — no decide solo si algo "pasó" o "falló", solo
+junta evidencia para que un humano la revise. Requiere `DIFY_CHAT_API_KEY_<PROYECTO>` (o
+`DIFY_CHAT_API_KEY` genérica) en `.env` — es la API key de la App, no la del Dataset.
