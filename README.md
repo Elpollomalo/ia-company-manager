@@ -67,9 +67,12 @@ ia-company-manager/
     ├── briefings/                     # Reportes diarios/de auditoría (editores, auditoria)
     ├── estado-proyectos/               # Tablero de control humano: un archivo corto por proyecto
     │                                     # (dónde vamos, qué falta que el humano haga/decida/pegue)
-    └── 4-bot-brain/                     # Documentos breves por tema, en lenguaje simple, para que
-                                            # un bot conversacional los use como contexto — cada uno
-                                            # remite a vault/3-threads/ para el detalle completo
+    ├── 4-bot-brain/                     # Documentos breves por tema, en lenguaje simple, para que
+    │                                       # un bot conversacional los use como contexto — cada uno
+    │                                       # remite a vault/3-threads/ para el detalle completo
+    └── 5-bot-logs/                        # Log de preguntas/respuestas reales de cada bot en
+                                              # producción (un .md por día, por proyecto) — para
+                                              # detectar fallas y pulir el 4-bot-brain con el tiempo
 ```
 
 > `sources/` y `briefings/` viven **dentro** de `vault/` (no en la raíz) para que un único repo privado respalde todo el material confidencial del sistema — incluidos los reportes de auditoría, que pueden contener análisis de negocio real (precios, decisiones) de un proyecto.
