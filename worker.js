@@ -122,6 +122,155 @@ async function ejecutarSQL(sql) {
     }
 }
 
+// Herramienta opcional: gateada por el mismo flag `db_access: true` que run_sql,
+// ya que hoy solo el Programador la usa (proyecto TourBrain, base en Airtable).
+const AIRTABLE_TOOL = {
+    name: 'run_airtable',
+    description: "Ejecuta una llamada real contra la API REST de Airtable (v0) sobre la base configurada en AIRTABLE_BASE_ID, usando el Personal Access Token del entorno. Sirve tanto para gestionar el schema (crear/listar tablas y campos vía 'meta/bases/{baseId}/...') como para leer/escribir registros (vía '{baseId}/NombreTabla'). Usa el literal '{baseId}' en la ruta; el sistema lo sustituye automáticamente. El método DELETE es rechazado automáticamente y requiere aprobación humana explícita fuera de este flujo.",
+    input_schema: {
+        type: 'object',
+        properties: {
+            method: { type: 'string', enum: ['GET', 'POST', 'PATCH', 'PUT'], description: 'Método HTTP de la llamada.' },
+            ruta: { type: 'string', description: "Ruta relativa bajo https://api.airtable.com/v0/, ej. 'meta/bases/{baseId}/tables' o '{baseId}/Proveedores'. Usa el placeholder '{baseId}'." },
+            body: { type: 'object', description: 'Cuerpo JSON de la petición. Omitir en GET.' },
+        },
+        required: ['method', 'ruta'],
+    },
+};
+
+// Herramientas opcionales: gateadas por `code_repo_access: true` en el playbook.
+// A diferencia de write_file (limitado a vault/1-desk dentro de este mismo repo),
+// estas operan sobre TOURBRAIN_APP_DIR — un repo de GitHub separado y real
+// (Elpollomalo/tourbrain-app) que Vercel despliega automáticamente en cada push.
+const CODE_REPO_TOOLS = [
+    {
+        name: 'list_code_files',
+        description: 'Lista archivos y carpetas dentro del repo de código del proyecto TourBrain (tourbrain-app), en una ruta relativa a la raíz del repo.',
+        input_schema: {
+            type: 'object',
+            properties: { ruta: { type: 'string', description: "Ruta relativa a la raíz del repo, ej. '.' o 'app/proveedores'" } },
+            required: ['ruta'],
+        },
+    },
+    {
+        name: 'read_code_file',
+        description: 'Lee el contenido completo de un archivo del repo de código de TourBrain (tourbrain-app).',
+        input_schema: {
+            type: 'object',
+            properties: { ruta: { type: 'string', description: "Ruta relativa a la raíz del repo, ej. 'package.json'" } },
+            required: ['ruta'],
+        },
+    },
+    {
+        name: 'write_code_file',
+        description: 'Crea o sobreescribe un archivo real dentro del repo de código de TourBrain (tourbrain-app) — este es el proyecto Next.js que Vercel despliega en producción, no el vault interno.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                ruta: { type: 'string', description: "Ruta relativa a la raíz del repo, ej. 'app/page.tsx'" },
+                contenido: { type: 'string', description: 'Contenido completo a escribir en el archivo' },
+            },
+            required: ['ruta', 'contenido'],
+        },
+    },
+    {
+        name: 'commit_and_push_code',
+        description: 'Hace commit de todos los cambios pendientes en el repo tourbrain-app y los sube (push) a la rama main en GitHub. Como el repo está conectado a Vercel, el push dispara un deploy automático. Úsalo al terminar un grupo de cambios relacionados, no después de cada archivo individual.',
+        input_schema: {
+            type: 'object',
+            properties: { mensaje: { type: 'string', description: 'Mensaje de commit, descriptivo y en español, ej. "feat: layout base del sitio público"' } },
+            required: ['mensaje'],
+        },
+    },
+    {
+        name: 'run_build',
+        description: 'Corre "npm install && npm run build" de verdad sobre el repo tourbrain-app, y devuelve si compiló o no (con el error real si falló). Úsalo SIEMPRE antes de commit_and_push_code cuando hayas tocado código — muchos errores (tipos de TypeScript, imports rotos, opciones inválidas de una librería) solo se detectan compilando, no leyendo el código. Nota: variables de entorno que no existen en este entorno de prueba (ej. NEXT_PUBLIC_SUPABASE_URL) pueden hacer fallar el build por razones ajenas a tu código — si el error es claramente por una variable de entorno faltante y no por algo que tú escribiste, repórtalo así en vez de intentar arreglarlo.',
+        input_schema: { type: 'object', properties: {}, required: [] },
+    },
+];
+
+function resolverRutaCodigoSegura(rutaRelativa) {
+    const root = process.env.TOURBRAIN_APP_DIR;
+    if (!root) {
+        throw new Error('TOURBRAIN_APP_DIR no configurado en el entorno.');
+    }
+    const rutaAbsoluta = path.resolve(root, rutaRelativa);
+    if (rutaAbsoluta !== root && !rutaAbsoluta.startsWith(root + path.sep)) {
+        throw new Error(`Ruta fuera del repo de código no permitida: ${rutaRelativa}`);
+    }
+    return rutaAbsoluta;
+}
+
+async function commitYPushCodigo(mensaje) {
+    const root = process.env.TOURBRAIN_APP_DIR;
+    if (!root) {
+        return 'RECHAZADO: no hay TOURBRAIN_APP_DIR configurado en el entorno.';
+    }
+    try {
+        await execFileAsync('git', ['add', '-A'], { cwd: root });
+        try {
+            await execFileAsync('git', ['commit', '-m', mensaje], { cwd: root });
+        } catch (err) {
+            const salida = `${err.stdout || ''}${err.stderr || ''}${err.message || ''}`;
+            if (/nothing to commit/i.test(salida)) {
+                return 'OK: no había cambios pendientes que commitear.';
+            }
+            throw err;
+        }
+        await execFileAsync('git', ['push', 'origin', 'main'], { cwd: root });
+        return `OK: commit y push a main completados ("${mensaje}"). Vercel debería empezar el deploy automáticamente si el repo ya está conectado.`;
+    } catch (err) {
+        const salida = `${err.stdout || ''}${err.stderr || ''}${err.message || ''}`;
+        return `ERROR git: ${salida.slice(0, 1000)}`;
+    }
+}
+
+async function correrBuild() {
+    const root = process.env.TOURBRAIN_APP_DIR;
+    if (!root) {
+        return 'RECHAZADO: no hay TOURBRAIN_APP_DIR configurado en el entorno.';
+    }
+    try {
+        await execFileAsync('npm', ['install'], { cwd: root, timeout: 180000, maxBuffer: 10 * 1024 * 1024 });
+        const { stdout, stderr } = await execFileAsync('npm', ['run', 'build'], { cwd: root, timeout: 120000, maxBuffer: 10 * 1024 * 1024 });
+        return `OK: el build compiló sin errores.\n${(stdout + stderr).slice(-1500)}`;
+    } catch (err) {
+        const salida = `${err.stdout || ''}\n${err.stderr || ''}`.trim() || err.message;
+        if (err.killed || err.signal) {
+            return `ERROR BUILD: el proceso se quedó colgado y fue detenido por timeout (probablemente una llamada de red bloqueada, ej. una API key de prueba inválida) — no es necesariamente un error de tu código. Salida parcial: ${salida.slice(-1000)}`;
+        }
+        return `ERROR BUILD:\n${salida.slice(-2500)}`;
+    }
+}
+
+async function ejecutarAirtable(method, ruta, body) {
+    if (!process.env.AIRTABLE_PAT || !process.env.AIRTABLE_BASE_ID) {
+        return 'RECHAZADO: no hay AIRTABLE_PAT o AIRTABLE_BASE_ID configurados en el entorno.';
+    }
+    if (method === 'DELETE') {
+        return 'RECHAZADO: el método DELETE es una operación destructiva. Requiere aprobación humana explícita fuera de este flujo automático — repórtala en tu respuesta final en vez de ejecutarla.';
+    }
+    const rutaResuelta = ruta.replace('{baseId}', process.env.AIRTABLE_BASE_ID).replace(/^\/+/, '');
+    const url = `https://api.airtable.com/v0/${rutaResuelta}`;
+    try {
+        const respuesta = await fetch(url, {
+            method,
+            headers: {
+                Authorization: `Bearer ${process.env.AIRTABLE_PAT}`,
+                'Content-Type': 'application/json',
+            },
+            body: body ? JSON.stringify(body) : undefined,
+        });
+        const texto = await respuesta.text();
+        if (!respuesta.ok) {
+            return `ERROR AIRTABLE (${respuesta.status}): ${texto.slice(0, 1000)}`;
+        }
+        return `OK (${respuesta.status}). ${texto.slice(0, 1000)}`;
+    } catch (err) {
+        return `ERROR AIRTABLE: ${err.message}`;
+    }
+}
+
 function resolverRutaSegura(rutaRelativa) {
     const rutaAbsoluta = path.resolve(PROJECT_ROOT, rutaRelativa);
     if (rutaAbsoluta !== PROJECT_ROOT && !rutaAbsoluta.startsWith(PROJECT_ROOT + path.sep)) {
@@ -135,7 +284,7 @@ function rutaEstaAutorizada(rutaRelativa, writePaths) {
     return writePaths.some((base) => normalizada === base || normalizada.startsWith(`${base}/`));
 }
 
-async function ejecutarTool(nombre, input, writePaths, dbAccess) {
+async function ejecutarTool(nombre, input, writePaths, dbAccess, codeRepoAccess) {
     switch (nombre) {
         case 'list_files': {
             const rutaAbs = resolverRutaSegura(input.ruta);
@@ -163,6 +312,41 @@ async function ejecutarTool(nombre, input, writePaths, dbAccess) {
                 return 'RECHAZADO: este agente no tiene autoridad para ejecutar SQL (falta db_access: true en su playbook).';
             }
             return await ejecutarSQL(input.sql);
+        }
+        case 'run_airtable': {
+            if (!dbAccess) {
+                return 'RECHAZADO: este agente no tiene autoridad para usar Airtable (falta db_access: true en su playbook).';
+            }
+            return await ejecutarAirtable(input.method, input.ruta, input.body);
+        }
+        case 'list_code_files': {
+            if (!codeRepoAccess) return 'RECHAZADO: este agente no tiene autoridad para operar sobre el repo de código (falta code_repo_access: true en su playbook).';
+            const rutaAbs = resolverRutaCodigoSegura(input.ruta);
+            if (!fs.existsSync(rutaAbs)) return `La ruta '${input.ruta}' no existe en el repo de código.`;
+            const entradas = fs.readdirSync(rutaAbs, { withFileTypes: true });
+            const listado = entradas.filter((e) => e.name !== '.git').map((e) => (e.isDirectory() ? `${e.name}/` : e.name)).join('\n');
+            return listado || '(carpeta vacía)';
+        }
+        case 'read_code_file': {
+            if (!codeRepoAccess) return 'RECHAZADO: este agente no tiene autoridad para operar sobre el repo de código (falta code_repo_access: true en su playbook).';
+            const rutaAbs = resolverRutaCodigoSegura(input.ruta);
+            if (!fs.existsSync(rutaAbs)) return `El archivo '${input.ruta}' no existe en el repo de código.`;
+            return fs.readFileSync(rutaAbs, 'utf-8');
+        }
+        case 'write_code_file': {
+            if (!codeRepoAccess) return 'RECHAZADO: este agente no tiene autoridad para operar sobre el repo de código (falta code_repo_access: true en su playbook).';
+            const rutaAbs = resolverRutaCodigoSegura(input.ruta);
+            fs.mkdirSync(path.dirname(rutaAbs), { recursive: true });
+            fs.writeFileSync(rutaAbs, input.contenido, 'utf-8');
+            return `Archivo de código guardado en '${input.ruta}' (${input.contenido.length} caracteres).`;
+        }
+        case 'commit_and_push_code': {
+            if (!codeRepoAccess) return 'RECHAZADO: este agente no tiene autoridad para operar sobre el repo de código (falta code_repo_access: true en su playbook).';
+            return await commitYPushCodigo(input.mensaje);
+        }
+        case 'run_build': {
+            if (!codeRepoAccess) return 'RECHAZADO: este agente no tiene autoridad para operar sobre el repo de código (falta code_repo_access: true en su playbook).';
+            return await correrBuild();
         }
         default:
             return `Herramienta desconocida: ${nombre}`;
@@ -197,7 +381,9 @@ const worker = new Worker('cola-de-agentes', async (job) => {
     }
 
     const dbAccess = /db_access:\s*true/i.test(playbookContenido);
-    const herramientas = dbAccess ? [...TOOLS, SQL_TOOL] : TOOLS;
+    const codeRepoAccess = /code_repo_access:\s*true/i.test(playbookContenido);
+    let herramientas = dbAccess ? [...TOOLS, SQL_TOOL, AIRTABLE_TOOL] : [...TOOLS];
+    if (codeRepoAccess) herramientas = [...herramientas, ...CODE_REPO_TOOLS];
 
     const matchProvider = playbookContenido.match(/provider:\s*(\w+)/);
     const provider = matchProvider ? matchProvider[1].trim().toLowerCase() : 'anthropic';
@@ -220,10 +406,14 @@ const worker = new Worker('cola-de-agentes', async (job) => {
         ? '\n\nEste rol requiere voz propia: varía tu redacción y estructura, evita sonar robótico o repetitivo. No sacrifiques la fidelidad a las fuentes por creatividad.'
         : '';
 
-    console.log(`🧠 Invocando a ${provider} usando el rol de ${agente} (modo ${modoCreativo ? 'creativo' : 'preciso'}, escritura: ${writePaths.join(', ') || 'ninguna'}, db_access: ${dbAccess}) para el proyecto ${proyecto}...`);
+    console.log(`🧠 Invocando a ${provider} usando el rol de ${agente} (modo ${modoCreativo ? 'creativo' : 'preciso'}, escritura: ${writePaths.join(', ') || 'ninguna'}, db_access: ${dbAccess}, code_repo_access: ${codeRepoAccess}) para el proyecto ${proyecto}...`);
 
     const instruccionSQL = dbAccess
-        ? '\n\nTambién tienes acceso a run_sql para ejecutar SQL real contra la base de datos de staging. Sentencias destructivas (DROP/DELETE/ALTER/TRUNCATE) son rechazadas automáticamente por el sistema; si necesitas una, repórtala en tu respuesta final para que un humano la revise, no intentes forzarla.'
+        ? '\n\nTambién tienes acceso a run_sql para ejecutar SQL real contra la base de datos de staging. Sentencias destructivas (DROP/DELETE/ALTER/TRUNCATE) son rechazadas automáticamente por el sistema; si necesitas una, repórtala en tu respuesta final para que un humano la revise, no intentes forzarla.\n\nTambién tienes acceso a run_airtable para llamar a la API REST de Airtable (schema y registros) contra la base configurada en AIRTABLE_BASE_ID. El método DELETE es rechazado automáticamente por el sistema; si necesitas uno, repórtalo en tu respuesta final para que un humano lo revise, no intentes forzarlo.'
+        : '';
+
+    const instruccionCodigo = codeRepoAccess
+        ? '\n\nTambién tienes acceso a list_code_files, read_code_file, write_code_file, run_build y commit_and_push_code para operar sobre el repo de código real de tourbrain-app (proyecto Next.js, GitHub: Elpollomalo/tourbrain-app, desplegado en Vercel). A diferencia de write_file (que solo escribe en vault/1-desk de este repo interno), estos archivos son el producto real que se publica en producción — escribe código completo y funcional, no pseudocódigo ni descripciones. OBLIGATORIO: corre run_build después de escribir/modificar código y ANTES de commit_and_push_code — leer el código no basta para detectar errores de tipos, imports rotos u opciones inválidas de una librería, solo compilar de verdad los detecta. Si run_build falla por algo que tú escribiste, corrígelo y vuelve a correrlo hasta que compile antes de subir. Si falla por algo ajeno a tu código (ej. una variable de entorno que no existe en este entorno de prueba), repórtalo explícitamente en tu resumen en vez de intentar arreglarlo o de subir código sin haber podido confirmar que compila. Usa commit_and_push_code al terminar un grupo de cambios relacionados y funcionales (no después de cada archivo suelto), con un mensaje de commit descriptivo. Un push a main dispara un deploy automático en Vercel si el repo ya está conectado — no asumas que un push equivale a que el sitio ya esté en línea con el dominio final, eso depende de configuración adicional fuera de tu alcance (ver house rules).'
         : '';
 
     // Bloque estático (idéntico para todas las tareas de este agente): se marca con
@@ -232,7 +422,7 @@ const worker = new Worker('cola-de-agentes', async (job) => {
     const systemEstatico = `Eres un agente de IA especializado que forma parte de una organización virtual.
         Debes actuar estrictamente bajo los siguientes estatutos y playbooks.
         Tienes acceso a herramientas (list_files, read_file, write_file) para operar sobre el filesystem real del vault. Úsalas para cumplir tu misión: no te limites a describir lo que harías, hazlo.
-        write_file solo funciona dentro de tus rutas autorizadas: ${writePaths.join(', ') || 'ninguna'}. Cualquier intento fuera de esas rutas será rechazado automáticamente.${instruccionVoz}${instruccionSQL}
+        write_file solo funciona dentro de tus rutas autorizadas: ${writePaths.join(', ') || 'ninguna'}. Cualquier intento fuera de esas rutas será rechazado automáticamente.${instruccionVoz}${instruccionSQL}${instruccionCodigo}
 
         === ESTATUTOS DEL SISTEMA (HOUSE RULES) ===
         ${houseRules}
@@ -308,7 +498,7 @@ const worker = new Worker('cola-de-agentes', async (job) => {
 
                 let resultado;
                 try {
-                    resultado = await ejecutarTool(toolCall.function.name, input, writePaths, dbAccess);
+                    resultado = await ejecutarTool(toolCall.function.name, input, writePaths, dbAccess, codeRepoAccess);
                 } catch (err) {
                     resultado = `ERROR: ${err.message}`;
                 }
@@ -326,13 +516,18 @@ const worker = new Worker('cola-de-agentes', async (job) => {
         while (turnos < MAX_TURNOS_AGENTE) {
             turnos++;
 
-            ultimaRespuesta = await anthropic.messages.create({
+            // max_tokens alto (64000) necesita streaming — sin esto, el SDK puede
+            // cortar la petición por timeout HTTP antes de que el modelo termine
+            // de generar una respuesta larga (nos pasó con 16000 sin streaming:
+            // el modelo se quedaba sin tokens a medio entregable).
+            const streamRespuesta = anthropic.messages.stream({
                 model: 'claude-sonnet-5',
-                max_tokens: 16000,
+                max_tokens: 64000,
                 system: systemPrompt,
                 tools: herramientas,
                 messages,
             });
+            ultimaRespuesta = await streamRespuesta.finalMessage();
 
             console.log(`↳ [${agente}] turno ${turnos} — stop_reason: ${ultimaRespuesta.stop_reason}`);
 
@@ -357,7 +552,7 @@ const worker = new Worker('cola-de-agentes', async (job) => {
 
                 let resultado;
                 try {
-                    resultado = await ejecutarTool(bloque.name, bloque.input, writePaths, dbAccess);
+                    resultado = await ejecutarTool(bloque.name, bloque.input, writePaths, dbAccess, codeRepoAccess);
                 } catch (err) {
                     resultado = `ERROR: ${err.message}`;
                 }

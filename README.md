@@ -54,6 +54,7 @@ ia-company-manager/
 │   ├── cartografos.md
 │   ├── criticos.md
 │   ├── editores.md
+│   ├── programadores-borrador.md
 │   ├── programadores.md
 │   ├── marketing.md
 │   └── auditoria.md
@@ -99,7 +100,8 @@ write_paths: vault/2-atoms, vault/1-desk    # únicas rutas donde este agente pu
 | `cartografos` | Enlaza notas atómicas relacionadas con `[[wikilinks]]` | `vault/2-atoms/`, `vault/1-desk/` |
 | `criticos` | Detecta contradicciones entre notas, marca `[FRICTION]`, nunca resuelve solo | `vault/2-atoms/`, `vault/1-desk/` |
 | `editores` | Sintetiza clusters de átomos en threads por proyecto + briefing diario | `vault/3-threads/`, `vault/briefings/`, `vault/1-desk/` |
-| `programadores` | Construye/mantiene código, siempre en staging, nunca deploy sin aprobación | `vault/1-desk/` |
+| `programadores-borrador` | Pasada barata (DeepSeek): produce la primera versión real de código/schema sobre `tourbrain-app`, para que `programadores` la revise después | `vault/1-desk/`, repo `tourbrain-app` |
+| `programadores` | Revisa y corrige el borrador de `programadores-borrador` (o construye directo si el riesgo es alto); siempre en staging, nunca deploy sin aprobación | `vault/1-desk/`, repo `tourbrain-app` |
 | `marketing` | Redacta borradores de cara afuera basados solo en `vault/3-threads/`, deja en cola de aprobación | `vault/1-desk/` |
 | `auditoria` | Barrido periódico del vault (huérfanas, `[FRICTION]` sin resolver, notas sin fuente); reporte dual (briefing + notifica al asistente principal) | `vault/briefings/` |
 
@@ -111,13 +113,23 @@ write_paths: vault/2-atoms, vault/1-desk    # únicas rutas donde este agente pu
 
 ## Herramientas del agente (tool-use)
 
-`worker.js` corre un loop agéntico real (hasta 15 turnos por tarea) dándole a Claude 3 herramientas:
+`worker.js` corre un loop agéntico real (hasta 15 turnos por tarea) dándole a Claude herramientas, algunas siempre disponibles y otras gateadas por flags del frontmatter del playbook:
 
+**Siempre disponibles** (sobre el vault, raíz de este repo):
 - **`list_files(ruta)`** — lista archivos/carpetas relativas a la raíz del proyecto.
 - **`read_file(ruta)`** — lee el contenido completo de un archivo.
 - **`write_file(ruta, contenido)`** — crea/sobreescribe un archivo, solo si `ruta` está dentro de las `write_paths` del agente.
 
-Todas las rutas se resuelven de forma segura (`resolverRutaSegura`) para impedir salir de la raíz del proyecto.
+**Si `db_access: true`:**
+- **`run_sql(sql)`** — ejecuta SQL real contra la base de staging configurada; `DROP`/`DELETE`/`ALTER`/`TRUNCATE` se rechazan automáticamente.
+- **`run_airtable(method, ruta, body)`** — llama la API REST de Airtable (`AIRTABLE_PAT`/`AIRTABLE_BASE_ID`) para schema y registros del proyecto TourBrain (arquitectura anterior a Supabase); `DELETE` se rechaza automáticamente.
+
+**Si `code_repo_access: true`:** operan sobre `TOURBRAIN_APP_DIR`, un repo de código real y separado (`Elpollomalo/tourbrain-app`, desplegado en Vercel) — no sobre el vault.
+- **`list_code_files(ruta)`** / **`read_code_file(ruta)`** / **`write_code_file(ruta, contenido)`** — listar/leer/escribir archivos del repo.
+- **`run_build()`** — corre `npm install && npm run build` de verdad; obligatorio antes de commitear.
+- **`commit_and_push_code(mensaje)`** — commit + push a `main`, dispara deploy automático en Vercel.
+
+Todas las rutas se resuelven de forma segura (`resolverRutaSegura` / `resolverRutaCodigoSegura`) para impedir salir de la raíz correspondiente.
 
 ---
 
@@ -155,6 +167,12 @@ DEEPSEEK_API_KEY=sk-...     # requerido por cualquier agente con provider: deeps
 WORKER_CONCURRENCY=3       # opcional, default 3
 REDIS_HOST=127.0.0.1        # opcional, default 127.0.0.1
 REDIS_PORT=6379               # opcional, default 6379
+
+AIRTABLE_PAT=pat...            # requerido por run_airtable (agentes con db_access: true)
+AIRTABLE_BASE_ID=app...         # base de Airtable del proyecto TourBrain (arquitectura anterior)
+TOURBRAIN_APP_DIR=/ruta/local/tourbrain-app   # requerido por las herramientas de código
+                                                # (code_repo_access: true) — checkout local real
+                                                # del repo Elpollomalo/tourbrain-app
 
 DIFY_API_KEY_GNGA_WEB3=dataset-...   # API key del Dataset de Dify (Knowledge → API Access,
                                        # no la de una app) para el proyecto gnga-web3.
