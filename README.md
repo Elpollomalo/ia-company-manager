@@ -54,10 +54,12 @@ ia-company-manager/
 │   ├── cartografos.md
 │   ├── criticos.md
 │   ├── editores.md
+│   ├── disenadores.md
 │   ├── programadores-borrador.md
-│   ├── programadores.md
+│   ├── programadores-revision.md
 │   ├── marketing.md
-│   └── auditoria.md
+│   ├── auditoria.md
+│   └── auditoria-bots.md
 │
 └── vault/                    # 🔒 Repo git PRIVADO independiente (ia-company-manager-vault)
     ├── 0-raw/                  # Bandeja de entrada de notas crudas (se vacía tras ingest.js)
@@ -100,10 +102,12 @@ write_paths: vault/2-atoms, vault/1-desk    # únicas rutas donde este agente pu
 | `cartografos` | Enlaza notas atómicas relacionadas con `[[wikilinks]]` | `vault/2-atoms/`, `vault/1-desk/` |
 | `criticos` | Detecta contradicciones entre notas, marca `[FRICTION]`, nunca resuelve solo | `vault/2-atoms/`, `vault/1-desk/` |
 | `editores` | Sintetiza clusters de átomos en threads por proyecto + briefing diario | `vault/3-threads/`, `vault/briefings/`, `vault/1-desk/` |
-| `programadores-borrador` | Pasada barata (DeepSeek): produce la primera versión real de código/schema sobre `tourbrain-app`, para que `programadores` la revise después | `vault/1-desk/`, repo `tourbrain-app` |
-| `programadores` | Revisa y corrige el borrador de `programadores-borrador` (o construye directo si el riesgo es alto); siempre en staging, nunca deploy sin aprobación | `vault/1-desk/`, repo `tourbrain-app` |
+| `disenadores` | Solo para tareas con UI real: especificación de diseño (layout, paleta real del proyecto, estados, responsive) antes de construir — nunca escribe código | `vault/1-desk/` |
+| `programadores-borrador` | Pasada barata (DeepSeek): produce la primera versión real de código/schema sobre `tourbrain-app` (siguiendo la especificación de `disenadores` si hay una), para que `programadores-revision` la revise después | `vault/1-desk/`, repo `tourbrain-app` |
+| `programadores-revision` | Revisa el borrador de `programadores-borrador` (o construye directo si el riesgo es alto y no hay borrador previo) — en modo revisión **solo reporta hallazgos, nunca corrige ni comitea código él mismo**; el humano decide y aplica el fix después | `vault/1-desk/`, repo `tourbrain-app` (solo al construir directo) |
 | `marketing` | Redacta borradores de cara afuera basados solo en `vault/3-threads/`, deja en cola de aprobación | `vault/1-desk/` |
 | `auditoria` | Barrido periódico del vault (huérfanas, `[FRICTION]` sin resolver, notas sin fuente); reporte dual (briefing + notifica al asistente principal) | `vault/briefings/` |
+| `auditoria-bots` | Analiza los logs de preguntas/respuestas de los bots de Dify (`vault/5-bot-logs/`) contra su system prompt y cerebro reales, propone mejoras concretas — nunca aplica el cambio en Dify | `vault/5-bot-logs/{proyecto}/reportes/` |
 
 **Nota sobre `temperature`:** `claude-sonnet-5` ya no acepta ese parámetro en la API (la rechaza con 400). El valor en el frontmatter se usa como *clasificación* — si es mayor a 0, `worker.js` inyecta una instrucción de prompt pidiendo voz propia y variación, en vez de un parámetro numérico de sampling.
 
