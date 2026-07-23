@@ -464,6 +464,11 @@ const worker = new Worker('cola-de-agentes', async (job) => {
         while (turnos < MAX_TURNOS_AGENTE) {
             turnos++;
 
+            // max_tokens alto (32000) necesita streaming — sin esto, un documento largo
+            // se puede cortar por timeout HTTP antes de que el modelo termine (mismo bug
+            // que ya se había corregido del lado de Claude, pero nunca se aplicó aquí:
+            // se detectó porque un documento largo se quedó con finish_reason 'length'
+            // a los 16000 tokens sin streaming).
             const respuesta = await fetch(`${DEEPSEEK_BASE_URL}/chat/completions`, {
                 method: 'POST',
                 headers: {
@@ -472,7 +477,8 @@ const worker = new Worker('cola-de-agentes', async (job) => {
                 },
                 body: JSON.stringify({
                     model: 'deepseek-chat',
-                    max_tokens: 16000,
+                    max_tokens: 32000,
+                    stream: true,
                     messages: messagesDS,
                     tools: herramientasDS,
                 }),
@@ -483,9 +489,51 @@ const worker = new Worker('cola-de-agentes', async (job) => {
                 throw new Error(`DeepSeek ${respuesta.status}: ${errorTexto}`);
             }
 
-            const data = await respuesta.json();
-            const choice = data.choices[0];
-            const finishReason = choice.finish_reason;
+            // Acumula el stream SSE (formato compatible con OpenAI) en un solo
+            // mensaje final, igual que hace el SDK de Anthropic por debajo.
+            let contenidoAcumulado = '';
+            let finishReason = null;
+            const toolCallsAcumulados = [];
+            const reader = respuesta.body.getReader();
+            const decoder = new TextDecoder();
+            let bufferSSE = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                bufferSSE += decoder.decode(value, { stream: true });
+                const lineas = bufferSSE.split('\n');
+                bufferSSE = lineas.pop(); // línea incompleta, se guarda para el siguiente chunk
+
+                for (const linea of lineas) {
+                    if (!linea.startsWith('data: ')) continue;
+                    const payload = linea.slice(6).trim();
+                    if (payload === '[DONE]') continue;
+
+                    const evento = JSON.parse(payload);
+                    const delta = evento.choices[0].delta;
+                    if (evento.choices[0].finish_reason) finishReason = evento.choices[0].finish_reason;
+                    if (delta.content) contenidoAcumulado += delta.content;
+
+                    if (delta.tool_calls) {
+                        for (const tc of delta.tool_calls) {
+                            if (!toolCallsAcumulados[tc.index]) {
+                                toolCallsAcumulados[tc.index] = { id: '', type: 'function', function: { name: '', arguments: '' } };
+                            }
+                            const acumulado = toolCallsAcumulados[tc.index];
+                            if (tc.id) acumulado.id = tc.id;
+                            if (tc.function?.name) acumulado.function.name += tc.function.name;
+                            if (tc.function?.arguments) acumulado.function.arguments += tc.function.arguments;
+                        }
+                    }
+                }
+            }
+
+            const mensajeCompleto = {
+                role: 'assistant',
+                content: contenidoAcumulado || null,
+                tool_calls: toolCallsAcumulados.length ? toolCallsAcumulados : undefined,
+            };
 
             console.log(`↳ [${agente}] turno ${turnos} — finish_reason: ${finishReason}`);
 
@@ -495,13 +543,13 @@ const worker = new Worker('cola-de-agentes', async (job) => {
             }
 
             if (finishReason !== 'tool_calls') {
-                resultadoIA = choice.message.content || resultadoIA;
+                resultadoIA = mensajeCompleto.content || resultadoIA;
                 break;
             }
 
-            messagesDS.push(choice.message);
+            messagesDS.push(mensajeCompleto);
 
-            for (const toolCall of choice.message.tool_calls) {
+            for (const toolCall of mensajeCompleto.tool_calls) {
                 const input = JSON.parse(toolCall.function.arguments);
                 console.log(`🔧 [${agente}] invoca '${toolCall.function.name}':`, JSON.stringify(input));
 
