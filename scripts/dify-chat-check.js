@@ -12,6 +12,8 @@
 //   DIFY_CHAT_API_KEY_<PROYECTO>   (ej: DIFY_CHAT_API_KEY_GNGA_WEB3) → si no está, usa DIFY_CHAT_API_KEY
 //   DIFY_BASE_URL_<PROYECTO> / DIFY_BASE_URL   → opcional, default https://api.dify.ai/v1
 
+const fs = require('fs');
+const path = require('path');
 require('dotenv').config();
 
 const PREGUNTAS_AUDITORIA = {
@@ -21,7 +23,16 @@ const PREGUNTAS_AUDITORIA = {
         '¿Qué es el Vault?',
         '¿Tienen página web?',
     ],
+    'tourbrain': [
+        'Can you recommend a good restaurant in Cozumel?',
+        '¿Qué tours de snorkel o buceo tienen disponibles?',
+        'Where are you located?',
+        '¿Cómo hago una reserva?',
+        'Do you have any nightlife or bar recommendations?',
+    ],
 };
+
+const VAULT_LOGS_DIR = path.join(__dirname, '..', 'vault', '5-bot-logs');
 
 function slugEntorno(proyecto) {
     return proyecto.toUpperCase().replace(/[^A-Z0-9]+/g, '_');
@@ -77,14 +88,32 @@ async function main() {
     }
 
     console.log(`🔎 Probando el bot de '${proyecto}' con ${preguntas.length} pregunta(s)...\n`);
+
+    const ahora = new Date();
+    const lineasLog = [`## Corrida ${ahora.toISOString()}`, ''];
+
     for (const pregunta of preguntas) {
         console.log(`❓ ${pregunta}`);
+        lineasLog.push(`**❓ ${pregunta}**`, '');
         try {
             const respuesta = await preguntar(baseUrl, apiKey, pregunta);
             console.log(`🐿️ ${respuesta}\n`);
+            lineasLog.push(respuesta, '');
         } catch (err) {
             console.error(`✗ Error: ${err.message}\n`);
+            lineasLog.push(`✗ Error: ${err.message}`, '');
         }
+    }
+
+    // Solo se registra en el log si fue la batería completa de auditoría —
+    // una pregunta puntual (segundo argumento) es exploración manual, no auditoría.
+    if (!preguntaUnica) {
+        const carpetaProyecto = path.join(VAULT_LOGS_DIR, proyecto.toLowerCase());
+        fs.mkdirSync(carpetaProyecto, { recursive: true });
+        const fecha = ahora.toISOString().slice(0, 10);
+        const rutaLog = path.join(carpetaProyecto, `${fecha}.md`);
+        fs.appendFileSync(rutaLog, lineasLog.join('\n') + '\n---\n\n');
+        console.log(`📝 Registrado en vault/5-bot-logs/${proyecto.toLowerCase()}/${fecha}.md`);
     }
 }
 
