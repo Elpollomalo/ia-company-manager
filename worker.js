@@ -24,6 +24,15 @@ async function commitVault(mensaje) {
         if (!/nothing to commit/i.test(salida)) {
             console.warn(`⚠️ No se pudo commitear vault/: ${err.message}`);
         }
+        return;
+    }
+    // El commit local no sirve como respaldo real si nunca llega a GitHub —
+    // sin este push, un disco corrupto se lleva toda la historia con él.
+    try {
+        await execFileAsync('git', ['push', 'origin', 'main'], { cwd: VAULT_DIR });
+        console.log('☁️  vault/ pusheado a GitHub');
+    } catch (err) {
+        console.warn(`⚠️ No se pudo pushear vault/ a GitHub: ${err.stderr || err.message}`);
     }
 }
 
