@@ -362,7 +362,29 @@ async function ejecutarTool(nombre, input, writePaths, dbAccess, codeRepoAccess)
     }
 }
 
-const worker = new Worker('cola-de-agentes', async (job) => {
+// Serializa jobs del MISMO proyecto (ej. dos tareas seguidas para 'tourbrain')
+// para que nunca corran en paralelo sobre el mismo working directory de código
+// (tourbrain-app es un único checkout compartido, no uno por job). Jobs de
+// proyectos distintos sí pueden correr en paralelo, hasta WORKER_CONCURRENCY.
+//
+// Se descubrió el 24 julio 2026: dos jobs de 'tourbrain' corriendo casi a la
+// vez hicieron que el run_build de uno viera archivos a medio escribir del
+// otro (build falló por un módulo del otro job, sin dependencias instaladas
+// todavía). No causó daño real esa vez, pero el riesgo de que se pisen
+// archivos de verdad es serio.
+const colasPorProyecto = new Map(); // proyecto (lowercase) -> promesa cola (nunca rechaza)
+
+function ejecutarSerializadoPorProyecto(proyecto, tarea) {
+    const clave = String(proyecto || '').toLowerCase();
+    const colaAnterior = colasPorProyecto.get(clave) || Promise.resolve();
+    const resultado = colaAnterior.then(tarea, tarea);
+    // La cola guardada nunca debe rechazar — si lo hiciera, un job fallido
+    // dejaría bloqueados a todos los siguientes del mismo proyecto para siempre.
+    colasPorProyecto.set(clave, resultado.catch(() => {}));
+    return resultado;
+}
+
+async function procesarJob(job) {
     const { agente, proyecto, tarea } = job.data;
     console.log(`\n⚡ Procesando: Agente [${agente}] | Proyecto [${proyecto}]`);
 
@@ -655,7 +677,9 @@ const worker = new Worker('cola-de-agentes', async (job) => {
     await commitVault(`${agente} (${provider}) — ${proyecto} — tarea ${job.id}`);
 
     return { status: 'success', archivoGenerado: nombreArchivoSalida, herramientasInvocadas: bitacoraHerramientas.length };
-}, { connection, concurrency: WORKER_CONCURRENCY });
+}
+
+const worker = new Worker('cola-de-agentes', (job) => ejecutarSerializadoPorProyecto(job.data.proyecto, () => procesarJob(job)), { connection, concurrency: WORKER_CONCURRENCY });
 
 worker.on('completed', (job) => console.log(`✅ Tarea ${job.id} procesada con éxito por la IA.`));
 worker.on('failed', (job, err) => console.error(`❌ Tarea ${job.id} falló de forma crítica:`, err.message));
