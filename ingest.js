@@ -34,6 +34,7 @@ async function ejecutarIngesta() {
             else if (nombreMinusculas.includes('gnga')) proyectoDetectado = 'gnga-web3';
             else if (nombreMinusculas.includes('balam')) proyectoDetectado = 'creativa-balam';
             else if (nombreMinusculas.includes('ideas')) proyectoDetectado = 'agencia-ideas';
+            else if (nombreMinusculas.includes('tourquesa')) proyectoDetectado = 'tourquesa';
 
             // Movemos la fuente a vault/sources/ ANTES de encolar la tarea (no la borramos):
             // catalogadores exige que toda nota tenga una fuente verificable en el vault

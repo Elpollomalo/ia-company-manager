@@ -498,7 +498,7 @@ async function procesarJob(job) {
                     'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`,
                 },
                 body: JSON.stringify({
-                    model: 'deepseek-chat',
+                    model: 'deepseek-v4-flash',
                     max_tokens: 32000,
                     stream: true,
                     messages: messagesDS,
