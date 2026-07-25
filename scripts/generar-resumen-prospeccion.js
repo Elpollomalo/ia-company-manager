@@ -54,3 +54,13 @@ ${secciones.join('\n')}
 
 fs.writeFileSync(OUT_FILE, doc, 'utf-8');
 console.log(`Escrito: ${OUT_FILE} (${totalNegocios} negocios en ${filas.length} zonas)`);
+
+// Copia también a la raíz de /archivos (FileBrowser) para que Carlos lo tenga a un clic de
+// descargar, sin tener que entrar a la subcarpeta de prospección.
+const COPIA_FILEBROWSER = '/archivos/RESUMEN-GENERAL.md';
+try {
+    fs.copyFileSync(OUT_FILE, COPIA_FILEBROWSER);
+    console.log(`Copiado también a: ${COPIA_FILEBROWSER}`);
+} catch (err) {
+    console.warn(`No se pudo copiar a ${COPIA_FILEBROWSER}: ${err.message}`);
+}
