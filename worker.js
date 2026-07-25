@@ -213,6 +213,51 @@ async function ejecutarFetchUrl(url) {
     }
 }
 
+// Herramienta opcional: gateada por `search_access: true` en el playbook. A diferencia de
+// fetch_url (que solo lee una URL que ya conoces), esta permite DESCUBRIR URLs nuevas — es
+// el reemplazo real de "buscar en Google". Google/Bing/DuckDuckGo bloquean scraping directo
+// desde este VPS (probado el 25 julio 2026: los tres devuelven captcha/bloqueo), así que se
+// usa Serper.dev (API de resultados de Google real, ~$1 por 1000 búsquedas, 2500 gratis).
+const SEARCH_TOOL = {
+    name: 'search_web',
+    description: 'Busca en Google (vía API de Serper) y devuelve título, link y snippet de los primeros resultados. Úsala para DESCUBRIR sitios/negocios que no conoces todavía — para leer el contenido completo de un resultado, después usa fetch_url sobre su link.',
+    input_schema: {
+        type: 'object',
+        properties: {
+            query: { type: 'string', description: 'Términos de búsqueda, ej. "restaurantes en Mérida Yucatán"' },
+        },
+        required: ['query'],
+    },
+};
+
+async function ejecutarSearchWeb(query) {
+    const apiKey = process.env.SERPER_API_KEY;
+    if (!apiKey) {
+        return 'RECHAZADO: SERPER_API_KEY no está configurada en el entorno — pide a un humano que cree una cuenta en serper.dev y la agregue al .env del VPS.';
+    }
+    try {
+        const respuesta = await fetch('https://google.serper.dev/search', {
+            method: 'POST',
+            headers: { 'X-API-KEY': apiKey, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ q: query, gl: 'mx', hl: 'es' }),
+            signal: AbortSignal.timeout(15000),
+        });
+        if (!respuesta.ok) {
+            return `ERROR (${respuesta.status}) buscando "${query}" en Serper.`;
+        }
+        const data = await respuesta.json();
+        const resultados = (data.organic || []).slice(0, 10).map((r, i) =>
+            `${i + 1}. ${r.title}\n   ${r.link}\n   ${r.snippet || ''}`
+        );
+        if (resultados.length === 0) {
+            return `Sin resultados para "${query}".`;
+        }
+        return `Resultados para "${query}":\n\n${resultados.join('\n\n')}`;
+    } catch (err) {
+        return `ERROR buscando "${query}": ${err.message}`;
+    }
+}
+
 // Herramientas opcionales: gateadas por `code_repo_access: true` en el playbook.
 // A diferencia de write_file (limitado a vault/1-desk dentro de este mismo repo),
 // estas operan sobre TOURBRAIN_APP_DIR — un repo de GitHub separado y real
@@ -359,7 +404,7 @@ function rutaEstaAutorizada(rutaRelativa, writePaths) {
     return writePaths.some((base) => normalizada === base || normalizada.startsWith(`${base}/`));
 }
 
-async function ejecutarTool(nombre, input, writePaths, dbAccess, codeRepoAccess, webAccess) {
+async function ejecutarTool(nombre, input, writePaths, dbAccess, codeRepoAccess, webAccess, searchAccess) {
     switch (nombre) {
         case 'list_files': {
             const rutaAbs = resolverRutaSegura(input.ruta);
@@ -427,6 +472,10 @@ async function ejecutarTool(nombre, input, writePaths, dbAccess, codeRepoAccess,
             if (!webAccess) return 'RECHAZADO: este agente no tiene autoridad para acceder a internet (falta web_access: true en su playbook).';
             return await ejecutarFetchUrl(input.url);
         }
+        case 'search_web': {
+            if (!searchAccess) return 'RECHAZADO: este agente no tiene autoridad para buscar en internet (falta search_access: true en su playbook).';
+            return await ejecutarSearchWeb(input.query);
+        }
         default:
             return `Herramienta desconocida: ${nombre}`;
     }
@@ -484,9 +533,11 @@ async function procesarJob(job) {
     const dbAccess = /db_access:\s*true/i.test(playbookContenido);
     const codeRepoAccess = /code_repo_access:\s*true/i.test(playbookContenido);
     const webAccess = /web_access:\s*true/i.test(playbookContenido);
+    const searchAccess = /search_access:\s*true/i.test(playbookContenido);
     let herramientas = dbAccess ? [...TOOLS, SQL_TOOL, AIRTABLE_TOOL] : [...TOOLS];
     if (codeRepoAccess) herramientas = [...herramientas, ...CODE_REPO_TOOLS];
     if (webAccess) herramientas = [...herramientas, WEB_FETCH_TOOL];
+    if (searchAccess) herramientas = [...herramientas, SEARCH_TOOL];
 
     const matchProvider = playbookContenido.match(/provider:\s*(\w+)/);
     const provider = matchProvider ? matchProvider[1].trim().toLowerCase() : 'anthropic';
@@ -509,7 +560,7 @@ async function procesarJob(job) {
         ? '\n\nEste rol requiere voz propia: varía tu redacción y estructura, evita sonar robótico o repetitivo. No sacrifiques la fidelidad a las fuentes por creatividad.'
         : '';
 
-    console.log(`🧠 Invocando a ${provider} usando el rol de ${agente} (modo ${modoCreativo ? 'creativo' : 'preciso'}, escritura: ${writePaths.join(', ') || 'ninguna'}, db_access: ${dbAccess}, code_repo_access: ${codeRepoAccess}, web_access: ${webAccess}) para el proyecto ${proyecto}...`);
+    console.log(`🧠 Invocando a ${provider} usando el rol de ${agente} (modo ${modoCreativo ? 'creativo' : 'preciso'}, escritura: ${writePaths.join(', ') || 'ninguna'}, db_access: ${dbAccess}, code_repo_access: ${codeRepoAccess}, web_access: ${webAccess}, search_access: ${searchAccess}) para el proyecto ${proyecto}...`);
 
     const instruccionSQL = dbAccess
         ? '\n\nTambién tienes acceso a run_sql para ejecutar SQL real contra la base de datos de staging. Sentencias destructivas (DROP/DELETE/ALTER/TRUNCATE) son rechazadas automáticamente por el sistema; si necesitas una, repórtala en tu respuesta final para que un humano la revise, no intentes forzarla.\n\nTambién tienes acceso a run_airtable para llamar a la API REST de Airtable (schema y registros) contra la base configurada en AIRTABLE_BASE_ID. El método DELETE es rechazado automáticamente por el sistema; si necesitas uno, repórtalo en tu respuesta final para que un humano lo revise, no intentes forzarlo.'
@@ -523,13 +574,17 @@ async function procesarJob(job) {
         ? '\n\nTambién tienes acceso a fetch_url para descargar el contenido real (texto plano) de cualquier URL pública. Úsala para leer páginas web reales en vez de suponer qué dicen — especialmente cuando tu tarea te pida revisar el sitio en producción de un proyecto. Cada URL a visitar cuenta como una llamada por separado.'
         : '';
 
+    const instruccionSearch = searchAccess
+        ? '\n\nTambién tienes acceso a search_web para buscar en Google de verdad (vía Serper) y descubrir sitios/negocios que no conoces todavía — no inventes nombres de negocios ni URLs, búscalos primero. Después de encontrar un resultado relevante, usa fetch_url sobre su link si necesitas el contenido completo de esa página.'
+        : '';
+
     // Bloque estático (idéntico para todas las tareas de este agente): se marca con
     // cache_control para que la API lo cachee entre turnos de una misma corrida y entre
     // corridas distintas del mismo rol, en vez de volver a cobrarlo entero cada vez.
     const systemEstatico = `Eres un agente de IA especializado que forma parte de una organización virtual.
         Debes actuar estrictamente bajo los siguientes estatutos y playbooks.
         Tienes acceso a herramientas (list_files, read_file, write_file) para operar sobre el filesystem real del vault. Úsalas para cumplir tu misión: no te limites a describir lo que harías, hazlo.
-        write_file solo funciona dentro de tus rutas autorizadas: ${writePaths.join(', ') || 'ninguna'}. Cualquier intento fuera de esas rutas será rechazado automáticamente.${instruccionVoz}${instruccionSQL}${instruccionCodigo}${instruccionWeb}
+        write_file solo funciona dentro de tus rutas autorizadas: ${writePaths.join(', ') || 'ninguna'}. Cualquier intento fuera de esas rutas será rechazado automáticamente.${instruccionVoz}${instruccionSQL}${instruccionCodigo}${instruccionWeb}${instruccionSearch}
 
         === ESTATUTOS DEL SISTEMA (HOUSE RULES) ===
         ${houseRules}
@@ -653,7 +708,7 @@ async function procesarJob(job) {
 
                 let resultado;
                 try {
-                    resultado = await ejecutarTool(toolCall.function.name, input, writePaths, dbAccess, codeRepoAccess, webAccess);
+                    resultado = await ejecutarTool(toolCall.function.name, input, writePaths, dbAccess, codeRepoAccess, webAccess, searchAccess);
                 } catch (err) {
                     resultado = `ERROR: ${err.message}`;
                 }
@@ -707,7 +762,7 @@ async function procesarJob(job) {
 
                 let resultado;
                 try {
-                    resultado = await ejecutarTool(bloque.name, bloque.input, writePaths, dbAccess, codeRepoAccess, webAccess);
+                    resultado = await ejecutarTool(bloque.name, bloque.input, writePaths, dbAccess, codeRepoAccess, webAccess, searchAccess);
                 } catch (err) {
                     resultado = `ERROR: ${err.message}`;
                 }
