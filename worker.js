@@ -147,6 +147,72 @@ const AIRTABLE_TOOL = {
     },
 };
 
+// Herramienta opcional: gateada por `web_access: true` en el playbook. Permite a un agente
+// leer el contenido real de una URL pública (ej. el sitio en producción de un proyecto),
+// no solo lo que ya está documentado en el vault. Solo lectura — no hay forma de escribir
+// ni de disparar acciones vía esta herramienta, así que no requiere el mismo tipo de rechazo
+// de operaciones destructivas que run_sql/run_airtable.
+const WEB_FETCH_TOOL = {
+    name: 'fetch_url',
+    description: 'Descarga una URL pública real (GET) y devuelve su texto legible (HTML convertido a texto plano, sin scripts/estilos). Úsala para leer el contenido actual de una página web real, no inventes lo que dice una página sin haberla leído con esta herramienta.',
+    input_schema: {
+        type: 'object',
+        properties: {
+            url: { type: 'string', description: 'URL completa a descargar, ej. https://ejemplo.com/pagina' },
+        },
+        required: ['url'],
+    },
+};
+
+const TEXTO_MAX_CHARS = 12000;
+
+function htmlATexto(html) {
+    return html
+        .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+        .replace(/<!--[\s\S]*?-->/g, ' ')
+        .replace(/<(br|p|div|li|h[1-6]|tr)\b[^>]*>/gi, '\n')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&amp;/gi, '&')
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>')
+        .replace(/&quot;/gi, '"')
+        .replace(/&#39;/gi, "'")
+        .replace(/[ \t]+/g, ' ')
+        .replace(/\n\s*\n\s*\n+/g, '\n\n')
+        .trim();
+}
+
+async function ejecutarFetchUrl(url) {
+    let parsed;
+    try {
+        parsed = new URL(url);
+    } catch {
+        return `RECHAZADO: '${url}' no es una URL válida.`;
+    }
+    if (!/^https?:$/.test(parsed.protocol)) {
+        return `RECHAZADO: solo se permiten URLs http/https, no '${parsed.protocol}'.`;
+    }
+    try {
+        const respuesta = await fetch(url, {
+            redirect: 'follow',
+            headers: { 'User-Agent': 'Mozilla/5.0 (compatible; ia-company-manager-bot/1.0)' },
+            signal: AbortSignal.timeout(15000),
+        });
+        if (!respuesta.ok) {
+            return `ERROR (${respuesta.status} ${respuesta.statusText}) al descargar ${url}.`;
+        }
+        const contentType = respuesta.headers.get('content-type') || '';
+        const cuerpo = await respuesta.text();
+        const texto = contentType.includes('html') ? htmlATexto(cuerpo) : cuerpo.trim();
+        const truncado = texto.length > TEXTO_MAX_CHARS;
+        return `URL: ${url}\nEstado: ${respuesta.status}\n\n${texto.slice(0, TEXTO_MAX_CHARS)}${truncado ? `\n\n[TRUNCADO — el texto real sigue, esto son los primeros ${TEXTO_MAX_CHARS} caracteres]` : ''}`;
+    } catch (err) {
+        return `ERROR al descargar ${url}: ${err.message}`;
+    }
+}
+
 // Herramientas opcionales: gateadas por `code_repo_access: true` en el playbook.
 // A diferencia de write_file (limitado a vault/1-desk dentro de este mismo repo),
 // estas operan sobre TOURBRAIN_APP_DIR — un repo de GitHub separado y real
@@ -293,7 +359,7 @@ function rutaEstaAutorizada(rutaRelativa, writePaths) {
     return writePaths.some((base) => normalizada === base || normalizada.startsWith(`${base}/`));
 }
 
-async function ejecutarTool(nombre, input, writePaths, dbAccess, codeRepoAccess) {
+async function ejecutarTool(nombre, input, writePaths, dbAccess, codeRepoAccess, webAccess) {
     switch (nombre) {
         case 'list_files': {
             const rutaAbs = resolverRutaSegura(input.ruta);
@@ -357,6 +423,10 @@ async function ejecutarTool(nombre, input, writePaths, dbAccess, codeRepoAccess)
             if (!codeRepoAccess) return 'RECHAZADO: este agente no tiene autoridad para operar sobre el repo de código (falta code_repo_access: true en su playbook).';
             return await correrBuild();
         }
+        case 'fetch_url': {
+            if (!webAccess) return 'RECHAZADO: este agente no tiene autoridad para acceder a internet (falta web_access: true en su playbook).';
+            return await ejecutarFetchUrl(input.url);
+        }
         default:
             return `Herramienta desconocida: ${nombre}`;
     }
@@ -413,8 +483,10 @@ async function procesarJob(job) {
 
     const dbAccess = /db_access:\s*true/i.test(playbookContenido);
     const codeRepoAccess = /code_repo_access:\s*true/i.test(playbookContenido);
+    const webAccess = /web_access:\s*true/i.test(playbookContenido);
     let herramientas = dbAccess ? [...TOOLS, SQL_TOOL, AIRTABLE_TOOL] : [...TOOLS];
     if (codeRepoAccess) herramientas = [...herramientas, ...CODE_REPO_TOOLS];
+    if (webAccess) herramientas = [...herramientas, WEB_FETCH_TOOL];
 
     const matchProvider = playbookContenido.match(/provider:\s*(\w+)/);
     const provider = matchProvider ? matchProvider[1].trim().toLowerCase() : 'anthropic';
@@ -437,7 +509,7 @@ async function procesarJob(job) {
         ? '\n\nEste rol requiere voz propia: varía tu redacción y estructura, evita sonar robótico o repetitivo. No sacrifiques la fidelidad a las fuentes por creatividad.'
         : '';
 
-    console.log(`🧠 Invocando a ${provider} usando el rol de ${agente} (modo ${modoCreativo ? 'creativo' : 'preciso'}, escritura: ${writePaths.join(', ') || 'ninguna'}, db_access: ${dbAccess}, code_repo_access: ${codeRepoAccess}) para el proyecto ${proyecto}...`);
+    console.log(`🧠 Invocando a ${provider} usando el rol de ${agente} (modo ${modoCreativo ? 'creativo' : 'preciso'}, escritura: ${writePaths.join(', ') || 'ninguna'}, db_access: ${dbAccess}, code_repo_access: ${codeRepoAccess}, web_access: ${webAccess}) para el proyecto ${proyecto}...`);
 
     const instruccionSQL = dbAccess
         ? '\n\nTambién tienes acceso a run_sql para ejecutar SQL real contra la base de datos de staging. Sentencias destructivas (DROP/DELETE/ALTER/TRUNCATE) son rechazadas automáticamente por el sistema; si necesitas una, repórtala en tu respuesta final para que un humano la revise, no intentes forzarla.\n\nTambién tienes acceso a run_airtable para llamar a la API REST de Airtable (schema y registros) contra la base configurada en AIRTABLE_BASE_ID. El método DELETE es rechazado automáticamente por el sistema; si necesitas uno, repórtalo en tu respuesta final para que un humano lo revise, no intentes forzarlo.'
@@ -447,13 +519,17 @@ async function procesarJob(job) {
         ? '\n\nTambién tienes acceso a list_code_files, read_code_file, write_code_file, run_build y commit_and_push_code para operar sobre el repo de código real de tourbrain-app (proyecto Next.js, GitHub: Elpollomalo/tourbrain-app, desplegado en Vercel). A diferencia de write_file (que solo escribe en vault/1-desk de este repo interno), estos archivos son el producto real que se publica en producción — escribe código completo y funcional, no pseudocódigo ni descripciones. OBLIGATORIO: corre run_build después de escribir/modificar código y ANTES de commit_and_push_code — leer el código no basta para detectar errores de tipos, imports rotos u opciones inválidas de una librería, solo compilar de verdad los detecta. Si run_build falla por algo que tú escribiste, corrígelo y vuelve a correrlo hasta que compile antes de subir. Si falla por algo ajeno a tu código (ej. una variable de entorno que no existe en este entorno de prueba), repórtalo explícitamente en tu resumen en vez de intentar arreglarlo o de subir código sin haber podido confirmar que compila. Usa commit_and_push_code al terminar un grupo de cambios relacionados y funcionales (no después de cada archivo suelto), con un mensaje de commit descriptivo. Un push a main dispara un deploy automático en Vercel si el repo ya está conectado — no asumas que un push equivale a que el sitio ya esté en línea con el dominio final, eso depende de configuración adicional fuera de tu alcance (ver house rules).'
         : '';
 
+    const instruccionWeb = webAccess
+        ? '\n\nTambién tienes acceso a fetch_url para descargar el contenido real (texto plano) de cualquier URL pública. Úsala para leer páginas web reales en vez de suponer qué dicen — especialmente cuando tu tarea te pida revisar el sitio en producción de un proyecto. Cada URL a visitar cuenta como una llamada por separado.'
+        : '';
+
     // Bloque estático (idéntico para todas las tareas de este agente): se marca con
     // cache_control para que la API lo cachee entre turnos de una misma corrida y entre
     // corridas distintas del mismo rol, en vez de volver a cobrarlo entero cada vez.
     const systemEstatico = `Eres un agente de IA especializado que forma parte de una organización virtual.
         Debes actuar estrictamente bajo los siguientes estatutos y playbooks.
         Tienes acceso a herramientas (list_files, read_file, write_file) para operar sobre el filesystem real del vault. Úsalas para cumplir tu misión: no te limites a describir lo que harías, hazlo.
-        write_file solo funciona dentro de tus rutas autorizadas: ${writePaths.join(', ') || 'ninguna'}. Cualquier intento fuera de esas rutas será rechazado automáticamente.${instruccionVoz}${instruccionSQL}${instruccionCodigo}
+        write_file solo funciona dentro de tus rutas autorizadas: ${writePaths.join(', ') || 'ninguna'}. Cualquier intento fuera de esas rutas será rechazado automáticamente.${instruccionVoz}${instruccionSQL}${instruccionCodigo}${instruccionWeb}
 
         === ESTATUTOS DEL SISTEMA (HOUSE RULES) ===
         ${houseRules}
@@ -577,7 +653,7 @@ async function procesarJob(job) {
 
                 let resultado;
                 try {
-                    resultado = await ejecutarTool(toolCall.function.name, input, writePaths, dbAccess, codeRepoAccess);
+                    resultado = await ejecutarTool(toolCall.function.name, input, writePaths, dbAccess, codeRepoAccess, webAccess);
                 } catch (err) {
                     resultado = `ERROR: ${err.message}`;
                 }
@@ -631,7 +707,7 @@ async function procesarJob(job) {
 
                 let resultado;
                 try {
-                    resultado = await ejecutarTool(bloque.name, bloque.input, writePaths, dbAccess, codeRepoAccess);
+                    resultado = await ejecutarTool(bloque.name, bloque.input, writePaths, dbAccess, codeRepoAccess, webAccess);
                 } catch (err) {
                     resultado = `ERROR: ${err.message}`;
                 }
