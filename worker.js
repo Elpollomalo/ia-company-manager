@@ -231,32 +231,41 @@ const SEARCH_TOOL = {
 };
 
 // Límite duro mensual — protección en código, no solo instrucción de prompt. Carlos pidió
-// explícitamente no llevarse una sorpresa de gasto con Serper y fijó 300/mes como tope real
-// (muy por debajo de las 2500 gratis de la cuenta). El diseño de los agentes ya usa Sección
-// Amarilla como método principal (gratis), así que search_web es solo respaldo — en uso
-// normal ni se acerca a este límite. Ajustar SEARCH_MONTHLY_LIMIT si Carlos decide subirlo.
-const SEARCH_MONTHLY_LIMIT = 300;
-const SEARCH_USAGE_FILE = path.join(VAULT_DIR, '.search-usage.json');
-
-function verificarYRegistrarBusqueda() {
+// explícitamente no llevarse una sorpresa de gasto, tanto con Serper como con generación de
+// imágenes. Función genérica: cada herramienta que gaste dinero real tiene su propio archivo
+// contador y su propio límite, pero la lógica de "cuenta y corta" es la misma para todas.
+function verificarYRegistrarUso(archivoContador, limiteMensual) {
     const mesActual = new Date().toISOString().slice(0, 7); // "2026-07"
     let uso = {};
     try {
-        uso = JSON.parse(fs.readFileSync(SEARCH_USAGE_FILE, 'utf-8'));
+        uso = JSON.parse(fs.readFileSync(archivoContador, 'utf-8'));
     } catch {
         uso = {};
     }
     const usadasEsteMes = uso[mesActual] || 0;
-    if (usadasEsteMes >= SEARCH_MONTHLY_LIMIT) {
+    if (usadasEsteMes >= limiteMensual) {
         return { permitido: false, usadas: usadasEsteMes };
     }
     uso[mesActual] = usadasEsteMes + 1;
     // Solo conservamos el mes actual y el anterior — no hace falta un historial creciente.
     const meses = Object.keys(uso).sort();
     const usoLimpio = Object.fromEntries(meses.slice(-2).map((m) => [m, uso[m]]));
-    fs.writeFileSync(SEARCH_USAGE_FILE, JSON.stringify(usoLimpio, null, 2));
+    fs.writeFileSync(archivoContador, JSON.stringify(usoLimpio, null, 2));
     return { permitido: true, usadas: usadasEsteMes + 1 };
 }
+
+// search_web (Serper) — 300 búsquedas/mes, muy por debajo de las 2500 gratis de la cuenta.
+// El diseño de los agentes ya usa Sección Amarilla como método principal (gratis), así que
+// search_web es solo respaldo — en uso normal ni se acerca a este límite.
+const SEARCH_MONTHLY_LIMIT = 300;
+const SEARCH_USAGE_FILE = path.join(VAULT_DIR, '.search-usage.json');
+const verificarYRegistrarBusqueda = () => verificarYRegistrarUso(SEARCH_USAGE_FILE, SEARCH_MONTHLY_LIMIT);
+
+// generate_image (OpenAI) — 1000 imágenes/mes a calidad baja (~$5 USD tope real, fijado por
+// Carlos el 26 julio 2026).
+const IMAGE_MONTHLY_LIMIT = 1000;
+const IMAGE_USAGE_FILE = path.join(VAULT_DIR, '.image-usage.json');
+const verificarYRegistrarImagen = () => verificarYRegistrarUso(IMAGE_USAGE_FILE, IMAGE_MONTHLY_LIMIT);
 
 async function ejecutarSearchWeb(query) {
     const apiKey = process.env.SERPER_API_KEY;
@@ -287,6 +296,75 @@ async function ejecutarSearchWeb(query) {
         return `Resultados para "${query}":\n\n${resultados.join('\n\n')}`;
     } catch (err) {
         return `ERROR buscando "${query}": ${err.message}`;
+    }
+}
+
+// Herramienta opcional: gateada por `image_access: true` en el playbook. Genera una imagen real
+// desde una descripción de texto (OpenAI gpt-image-1-mini) y la guarda como archivo dentro de
+// las rutas autorizadas del agente (mismo mecanismo de permisos que write_file).
+//
+// Por defecto SIEMPRE usa el modelo mini en calidad baja (~$0.005/imagen) — Carlos pidió
+// explícitamente "puro mini, a menos que se autoricen". Calidad alta / modelo completo
+// (gpt-image-1) solo se habilita si el playbook del agente declara `image_hq_access: true`;
+// si un agente sin ese permiso pide calidad alta, se le baja a mini/baja en silencio (con aviso
+// en la respuesta) en vez de rechazar la tarea completa.
+const IMAGE_GEN_TOOL = {
+    name: 'generate_image',
+    description: 'Genera una imagen real a partir de una descripción de texto y la guarda como archivo PNG. Por defecto usa el modelo económico en calidad baja — suficiente para íconos, banners simples y bocetos. Solo agentes con permiso especial pueden pedir calidad alta.',
+    input_schema: {
+        type: 'object',
+        properties: {
+            prompt: { type: 'string', description: 'Descripción detallada en inglés de la imagen a generar (mejor calidad que en español).' },
+            ruta: { type: 'string', description: "Ruta relativa donde guardar el PNG, dentro de tus carpetas autorizadas, ej. 'vault/8-imagenes-generadas/gnga-web3/banner-lanzamiento.png'" },
+            calidad: { type: 'string', enum: ['baja', 'alta'], description: "'baja' (default, barato) o 'alta' — 'alta' solo funciona si tu playbook tiene image_hq_access: true, si no se usa 'baja' automáticamente." },
+        },
+        required: ['prompt', 'ruta'],
+    },
+};
+
+async function ejecutarGenerateImage(prompt, ruta, calidadPedida, writePaths, imageHqAccess) {
+    if (!rutaEstaAutorizada(ruta, writePaths)) {
+        return `RECHAZADO: no tienes autoridad de escritura sobre '${ruta}'. Rutas permitidas: ${writePaths.join(', ')}`;
+    }
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+        return 'RECHAZADO: OPENAI_API_KEY no está configurada en el entorno — pide a un humano que la agregue al .env del VPS.';
+    }
+    const chequeo = verificarYRegistrarImagen();
+    if (!chequeo.permitido) {
+        return `RECHAZADO: límite mensual de ${IMAGE_MONTHLY_LIMIT} imágenes ya alcanzado (protección de costo configurada por Carlos). Se reactiva el próximo mes.`;
+    }
+
+    const quiereAlta = calidadPedida === 'alta';
+    const autorizadoParaAlta = quiereAlta && imageHqAccess;
+    const model = autorizadoParaAlta ? 'gpt-image-1' : 'gpt-image-1-mini';
+    const quality = autorizadoParaAlta ? 'high' : 'low';
+    const avisoDowngrade = quiereAlta && !autorizadoParaAlta
+        ? ' (pediste calidad alta pero tu playbook no tiene image_hq_access: true — se generó en baja calidad en su lugar.)'
+        : '';
+
+    try {
+        const respuesta = await fetch('https://api.openai.com/v1/images/generations', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model, prompt, size: '1024x1024', quality, n: 1 }),
+            signal: AbortSignal.timeout(60000),
+        });
+        if (!respuesta.ok) {
+            const errorTexto = await respuesta.text();
+            return `ERROR (${respuesta.status}) generando imagen: ${errorTexto.slice(0, 500)}`;
+        }
+        const data = await respuesta.json();
+        const b64 = data?.data?.[0]?.b64_json;
+        if (!b64) {
+            return `ERROR: OpenAI no devolvió una imagen válida. Respuesta: ${JSON.stringify(data).slice(0, 500)}`;
+        }
+        const rutaAbs = resolverRutaSegura(ruta);
+        fs.mkdirSync(path.dirname(rutaAbs), { recursive: true });
+        fs.writeFileSync(rutaAbs, Buffer.from(b64, 'base64'));
+        return `Imagen guardada en '${ruta}' (modelo ${model}, calidad ${quality}).${avisoDowngrade}`;
+    } catch (err) {
+        return `ERROR generando imagen: ${err.message}`;
     }
 }
 
@@ -436,7 +514,7 @@ function rutaEstaAutorizada(rutaRelativa, writePaths) {
     return writePaths.some((base) => normalizada === base || normalizada.startsWith(`${base}/`));
 }
 
-async function ejecutarTool(nombre, input, writePaths, dbAccess, codeRepoAccess, webAccess, searchAccess) {
+async function ejecutarTool(nombre, input, writePaths, dbAccess, codeRepoAccess, webAccess, searchAccess, imageAccess, imageHqAccess) {
     switch (nombre) {
         case 'list_files': {
             const rutaAbs = resolverRutaSegura(input.ruta);
@@ -508,6 +586,10 @@ async function ejecutarTool(nombre, input, writePaths, dbAccess, codeRepoAccess,
             if (!searchAccess) return 'RECHAZADO: este agente no tiene autoridad para buscar en internet (falta search_access: true en su playbook).';
             return await ejecutarSearchWeb(input.query);
         }
+        case 'generate_image': {
+            if (!imageAccess) return 'RECHAZADO: este agente no tiene autoridad para generar imágenes (falta image_access: true en su playbook).';
+            return await ejecutarGenerateImage(input.prompt, input.ruta, input.calidad, writePaths, imageHqAccess);
+        }
         default:
             return `Herramienta desconocida: ${nombre}`;
     }
@@ -566,10 +648,13 @@ async function procesarJob(job) {
     const codeRepoAccess = /code_repo_access:\s*true/i.test(playbookContenido);
     const webAccess = /web_access:\s*true/i.test(playbookContenido);
     const searchAccess = /search_access:\s*true/i.test(playbookContenido);
+    const imageAccess = /image_access:\s*true/i.test(playbookContenido);
+    const imageHqAccess = /image_hq_access:\s*true/i.test(playbookContenido);
     let herramientas = dbAccess ? [...TOOLS, SQL_TOOL, AIRTABLE_TOOL] : [...TOOLS];
     if (codeRepoAccess) herramientas = [...herramientas, ...CODE_REPO_TOOLS];
     if (webAccess) herramientas = [...herramientas, WEB_FETCH_TOOL];
     if (searchAccess) herramientas = [...herramientas, SEARCH_TOOL];
+    if (imageAccess) herramientas = [...herramientas, IMAGE_GEN_TOOL];
 
     const matchProvider = playbookContenido.match(/provider:\s*(\w+)/);
     const provider = matchProvider ? matchProvider[1].trim().toLowerCase() : 'anthropic';
@@ -592,7 +677,7 @@ async function procesarJob(job) {
         ? '\n\nEste rol requiere voz propia: varía tu redacción y estructura, evita sonar robótico o repetitivo. No sacrifiques la fidelidad a las fuentes por creatividad.'
         : '';
 
-    console.log(`🧠 Invocando a ${provider} usando el rol de ${agente} (modo ${modoCreativo ? 'creativo' : 'preciso'}, escritura: ${writePaths.join(', ') || 'ninguna'}, db_access: ${dbAccess}, code_repo_access: ${codeRepoAccess}, web_access: ${webAccess}, search_access: ${searchAccess}) para el proyecto ${proyecto}...`);
+    console.log(`🧠 Invocando a ${provider} usando el rol de ${agente} (modo ${modoCreativo ? 'creativo' : 'preciso'}, escritura: ${writePaths.join(', ') || 'ninguna'}, db_access: ${dbAccess}, code_repo_access: ${codeRepoAccess}, web_access: ${webAccess}, search_access: ${searchAccess}, image_access: ${imageAccess}) para el proyecto ${proyecto}...`);
 
     const instruccionSQL = dbAccess
         ? '\n\nTambién tienes acceso a run_sql para ejecutar SQL real contra la base de datos de staging. Sentencias destructivas (DROP/DELETE/ALTER/TRUNCATE) son rechazadas automáticamente por el sistema; si necesitas una, repórtala en tu respuesta final para que un humano la revise, no intentes forzarla.\n\nTambién tienes acceso a run_airtable para llamar a la API REST de Airtable (schema y registros) contra la base configurada en AIRTABLE_BASE_ID. El método DELETE es rechazado automáticamente por el sistema; si necesitas uno, repórtalo en tu respuesta final para que un humano lo revise, no intentes forzarlo.'
@@ -610,13 +695,17 @@ async function procesarJob(job) {
         ? '\n\nTambién tienes acceso a search_web para buscar en Google de verdad (vía Serper) y descubrir sitios/negocios que no conoces todavía — no inventes nombres de negocios ni URLs, búscalos primero. Después de encontrar un resultado relevante, usa fetch_url sobre su link si necesitas el contenido completo de esa página.'
         : '';
 
+    const instruccionImagen = imageAccess
+        ? `\n\nTambién tienes acceso a generate_image para crear una imagen real desde una descripción de texto y guardarla como PNG dentro de tus rutas autorizadas. Escribe el prompt en inglés (mejor calidad). Por defecto se genera en calidad baja/económica — no pidas calidad "alta" salvo que la tarea te lo pida explícitamente, y aun así solo funciona si tu playbook tiene image_hq_access${imageHqAccess ? ' (SÍ lo tienes)' : ' (NO lo tienes — cualquier solicitud de calidad alta se genera en baja automáticamente)'}.`
+        : '';
+
     // Bloque estático (idéntico para todas las tareas de este agente): se marca con
     // cache_control para que la API lo cachee entre turnos de una misma corrida y entre
     // corridas distintas del mismo rol, en vez de volver a cobrarlo entero cada vez.
     const systemEstatico = `Eres un agente de IA especializado que forma parte de una organización virtual.
         Debes actuar estrictamente bajo los siguientes estatutos y playbooks.
         Tienes acceso a herramientas (list_files, read_file, write_file) para operar sobre el filesystem real del vault. Úsalas para cumplir tu misión: no te limites a describir lo que harías, hazlo.
-        write_file solo funciona dentro de tus rutas autorizadas: ${writePaths.join(', ') || 'ninguna'}. Cualquier intento fuera de esas rutas será rechazado automáticamente.${instruccionVoz}${instruccionSQL}${instruccionCodigo}${instruccionWeb}${instruccionSearch}
+        write_file solo funciona dentro de tus rutas autorizadas: ${writePaths.join(', ') || 'ninguna'}. Cualquier intento fuera de esas rutas será rechazado automáticamente.${instruccionVoz}${instruccionSQL}${instruccionCodigo}${instruccionWeb}${instruccionSearch}${instruccionImagen}
 
         === ESTATUTOS DEL SISTEMA (HOUSE RULES) ===
         ${houseRules}
@@ -740,7 +829,7 @@ async function procesarJob(job) {
 
                 let resultado;
                 try {
-                    resultado = await ejecutarTool(toolCall.function.name, input, writePaths, dbAccess, codeRepoAccess, webAccess, searchAccess);
+                    resultado = await ejecutarTool(toolCall.function.name, input, writePaths, dbAccess, codeRepoAccess, webAccess, searchAccess, imageAccess, imageHqAccess);
                 } catch (err) {
                     resultado = `ERROR: ${err.message}`;
                 }
@@ -794,7 +883,7 @@ async function procesarJob(job) {
 
                 let resultado;
                 try {
-                    resultado = await ejecutarTool(bloque.name, bloque.input, writePaths, dbAccess, codeRepoAccess, webAccess, searchAccess);
+                    resultado = await ejecutarTool(bloque.name, bloque.input, writePaths, dbAccess, codeRepoAccess, webAccess, searchAccess, imageAccess, imageHqAccess);
                 } catch (err) {
                     resultado = `ERROR: ${err.message}`;
                 }
