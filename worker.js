@@ -230,10 +230,42 @@ const SEARCH_TOOL = {
     },
 };
 
+// Límite duro mensual — protección en código, no solo instrucción de prompt. Carlos pidió
+// explícitamente no llevarse una sorpresa de gasto con Serper; 2000/mes queda seguro debajo
+// de las 2500 gratis de la cuenta, y el diseño de los agentes ya usa Sección Amarilla como
+// método principal (gratis), así que search_web es solo respaldo — en uso normal ni se
+// acerca a este límite. Ajustar SEARCH_MONTHLY_LIMIT si Carlos decide subir el presupuesto.
+const SEARCH_MONTHLY_LIMIT = 2000;
+const SEARCH_USAGE_FILE = path.join(VAULT_DIR, '.search-usage.json');
+
+function verificarYRegistrarBusqueda() {
+    const mesActual = new Date().toISOString().slice(0, 7); // "2026-07"
+    let uso = {};
+    try {
+        uso = JSON.parse(fs.readFileSync(SEARCH_USAGE_FILE, 'utf-8'));
+    } catch {
+        uso = {};
+    }
+    const usadasEsteMes = uso[mesActual] || 0;
+    if (usadasEsteMes >= SEARCH_MONTHLY_LIMIT) {
+        return { permitido: false, usadas: usadasEsteMes };
+    }
+    uso[mesActual] = usadasEsteMes + 1;
+    // Solo conservamos el mes actual y el anterior — no hace falta un historial creciente.
+    const meses = Object.keys(uso).sort();
+    const usoLimpio = Object.fromEntries(meses.slice(-2).map((m) => [m, uso[m]]));
+    fs.writeFileSync(SEARCH_USAGE_FILE, JSON.stringify(usoLimpio, null, 2));
+    return { permitido: true, usadas: usadasEsteMes + 1 };
+}
+
 async function ejecutarSearchWeb(query) {
     const apiKey = process.env.SERPER_API_KEY;
     if (!apiKey) {
         return 'RECHAZADO: SERPER_API_KEY no está configurada en el entorno — pide a un humano que cree una cuenta en serper.dev y la agregue al .env del VPS.';
+    }
+    const chequeo = verificarYRegistrarBusqueda();
+    if (!chequeo.permitido) {
+        return `RECHAZADO: límite mensual de ${SEARCH_MONTHLY_LIMIT} búsquedas ya alcanzado (protección de costo configurada por Carlos). Se reactiva el próximo mes. No intentes compensar con fetch_url sobre buscadores — están bloqueados.`;
     }
     try {
         const respuesta = await fetch('https://google.serper.dev/search', {
