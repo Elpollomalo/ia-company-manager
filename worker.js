@@ -213,6 +213,105 @@ async function ejecutarFetchUrl(url) {
     }
 }
 
+// Herramienta opcional: gateada por el MISMO `web_access: true` que fetch_url (no es una
+// capacidad nueva de internet, es otra forma de leer una página ya autorizada). A diferencia
+// de fetch_url (que convierte el HTML a texto plano, perdiendo colores/imágenes), esta lee el
+// HTML crudo para sacar el favicon/logo real y los colores hexadecimales que el sitio usa —
+// pensada para conocer la identidad visual real de un prospecto antes de escribirle una
+// propuesta o generarle una maqueta.
+const BRAND_EXTRACT_TOOL = {
+    name: 'extract_site_branding',
+    description: 'Analiza el HTML real de una URL para encontrar su logo/favicon y los colores hexadecimales que usa. Si le das guardar_logo_en (una ruta dentro de tus carpetas autorizadas), además descarga el logo/favicon encontrado como archivo. Úsala sobre el sitio de un prospecto antes de escribir su propuesta o generar su maqueta, para que use su identidad visual real en vez de inventar una.',
+    input_schema: {
+        type: 'object',
+        properties: {
+            url: { type: 'string', description: 'URL del sitio a analizar, ej. https://www.cozudive.com/' },
+            guardar_logo_en: { type: 'string', description: "Ruta relativa donde guardar el logo/favicon si se encuentra, ej. 'vault/sources/creativa-balam/prospectos/cozudive/marca/logo-original.png'. Omitir si solo quieres el reporte de colores/URL sin descargar el archivo." },
+        },
+        required: ['url'],
+    },
+};
+
+function extraerColoresHex(html) {
+    const encontrados = html.match(/#[0-9a-fA-F]{6}\b/g) || [];
+    const conteo = {};
+    for (const c of encontrados) {
+        const norm = c.toLowerCase();
+        conteo[norm] = (conteo[norm] || 0) + 1;
+    }
+    return Object.entries(conteo)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 6)
+        .map(([color, veces]) => `${color} (${veces}×)`);
+}
+
+function extraerUrlLogo(html, baseUrl) {
+    const patrones = [
+        /<link[^>]+rel=["'](?:apple-touch-icon)[^"']*["'][^>]*href=["']([^"']+)["']/i,
+        /<link[^>]+rel=["'](?:icon|shortcut icon)["'][^>]*href=["']([^"']+)["']/i,
+        /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i,
+    ];
+    for (const patron of patrones) {
+        const m = html.match(patron);
+        if (m) {
+            try {
+                return new URL(m[1], baseUrl).toString();
+            } catch {
+                continue;
+            }
+        }
+    }
+    return null;
+}
+
+async function ejecutarExtractBranding(url, guardarLogoEn, writePaths) {
+    let respuesta;
+    try {
+        respuesta = await fetch(url, {
+            redirect: 'follow',
+            headers: { 'User-Agent': 'Mozilla/5.0 (compatible; ia-company-manager-bot/1.0)' },
+            signal: AbortSignal.timeout(15000),
+        });
+    } catch (err) {
+        return `ERROR al descargar ${url}: ${err.message}`;
+    }
+    if (!respuesta.ok) {
+        return `ERROR (${respuesta.status} ${respuesta.statusText}) al descargar ${url}.`;
+    }
+    const html = await respuesta.text();
+    const colores = extraerColoresHex(html);
+    const urlLogo = extraerUrlLogo(html, url);
+
+    let lineaLogo = urlLogo ? `Logo/favicon encontrado: ${urlLogo}` : 'No se encontró favicon/logo/og:image en el HTML.';
+
+    if (urlLogo && guardarLogoEn) {
+        if (!rutaEstaAutorizada(guardarLogoEn, writePaths)) {
+            lineaLogo += `\nNo se descargó: no tienes autoridad de escritura sobre '${guardarLogoEn}'.`;
+        } else {
+            try {
+                const imgResp = await fetch(urlLogo, { signal: AbortSignal.timeout(15000) });
+                if (imgResp.ok) {
+                    const buffer = Buffer.from(await imgResp.arrayBuffer());
+                    const rutaAbs = resolverRutaSegura(guardarLogoEn);
+                    fs.mkdirSync(path.dirname(rutaAbs), { recursive: true });
+                    fs.writeFileSync(rutaAbs, buffer);
+                    lineaLogo += `\nDescargado y guardado en '${guardarLogoEn}'.`;
+                } else {
+                    lineaLogo += `\nNo se pudo descargar (${imgResp.status}).`;
+                }
+            } catch (err) {
+                lineaLogo += `\nError al descargar: ${err.message}`;
+            }
+        }
+    }
+
+    const lineaColores = colores.length > 0
+        ? `Colores hexadecimales más frecuentes en el HTML: ${colores.join(', ')}`
+        : 'No se encontraron colores hexadecimales explícitos en el HTML (pueden estar en un archivo .css externo, no analizado aquí).';
+
+    return `Análisis de marca de ${url}:\n\n${lineaLogo}\n\n${lineaColores}\n\nNota: estos colores vienen de lo que aparece literal en el HTML — si el sitio carga su CSS desde un archivo externo, puede que falten colores reales que solo viven ahí.`;
+}
+
 // Herramienta opcional: gateada por `search_access: true` en el playbook. A diferencia de
 // fetch_url (que solo lee una URL que ya conoces), esta permite DESCUBRIR URLs nuevas — es
 // el reemplazo real de "buscar en Google". Google/Bing/DuckDuckGo bloquean scraping directo
@@ -582,6 +681,10 @@ async function ejecutarTool(nombre, input, writePaths, dbAccess, codeRepoAccess,
             if (!webAccess) return 'RECHAZADO: este agente no tiene autoridad para acceder a internet (falta web_access: true en su playbook).';
             return await ejecutarFetchUrl(input.url);
         }
+        case 'extract_site_branding': {
+            if (!webAccess) return 'RECHAZADO: este agente no tiene autoridad para acceder a internet (falta web_access: true en su playbook).';
+            return await ejecutarExtractBranding(input.url, input.guardar_logo_en, writePaths);
+        }
         case 'search_web': {
             if (!searchAccess) return 'RECHAZADO: este agente no tiene autoridad para buscar en internet (falta search_access: true en su playbook).';
             return await ejecutarSearchWeb(input.query);
@@ -652,7 +755,7 @@ async function procesarJob(job) {
     const imageHqAccess = /image_hq_access:\s*true/i.test(playbookContenido);
     let herramientas = dbAccess ? [...TOOLS, SQL_TOOL, AIRTABLE_TOOL] : [...TOOLS];
     if (codeRepoAccess) herramientas = [...herramientas, ...CODE_REPO_TOOLS];
-    if (webAccess) herramientas = [...herramientas, WEB_FETCH_TOOL];
+    if (webAccess) herramientas = [...herramientas, WEB_FETCH_TOOL, BRAND_EXTRACT_TOOL];
     if (searchAccess) herramientas = [...herramientas, SEARCH_TOOL];
     if (imageAccess) herramientas = [...herramientas, IMAGE_GEN_TOOL];
 
@@ -688,7 +791,7 @@ async function procesarJob(job) {
         : '';
 
     const instruccionWeb = webAccess
-        ? '\n\nTambién tienes acceso a fetch_url para descargar el contenido real (texto plano) de cualquier URL pública. Úsala para leer páginas web reales en vez de suponer qué dicen — especialmente cuando tu tarea te pida revisar el sitio en producción de un proyecto. Cada URL a visitar cuenta como una llamada por separado.'
+        ? '\n\nTambién tienes acceso a fetch_url para descargar el contenido real (texto plano) de cualquier URL pública. Úsala para leer páginas web reales en vez de suponer qué dicen — especialmente cuando tu tarea te pida revisar el sitio en producción de un proyecto. Cada URL a visitar cuenta como una llamada por separado.\n\nTambién tienes acceso a extract_site_branding para sacar el logo/favicon real y los colores hexadecimales que usa un sitio (a diferencia de fetch_url, que solo da texto plano sin colores ni imágenes). Úsala sobre el sitio de un prospecto antes de escribirle una propuesta o generarle una maqueta — así usas su identidad visual real en vez de inventar una. Si le pasas guardar_logo_en, descarga el logo/favicon encontrado como archivo dentro de tus carpetas autorizadas.'
         : '';
 
     const instruccionSearch = searchAccess
