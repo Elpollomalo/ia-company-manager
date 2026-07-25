@@ -231,11 +231,11 @@ const SEARCH_TOOL = {
 };
 
 // Límite duro mensual — protección en código, no solo instrucción de prompt. Carlos pidió
-// explícitamente no llevarse una sorpresa de gasto con Serper; 2000/mes queda seguro debajo
-// de las 2500 gratis de la cuenta, y el diseño de los agentes ya usa Sección Amarilla como
-// método principal (gratis), así que search_web es solo respaldo — en uso normal ni se
-// acerca a este límite. Ajustar SEARCH_MONTHLY_LIMIT si Carlos decide subir el presupuesto.
-const SEARCH_MONTHLY_LIMIT = 2000;
+// explícitamente no llevarse una sorpresa de gasto con Serper y fijó 300/mes como tope real
+// (muy por debajo de las 2500 gratis de la cuenta). El diseño de los agentes ya usa Sección
+// Amarilla como método principal (gratis), así que search_web es solo respaldo — en uso
+// normal ni se acerca a este límite. Ajustar SEARCH_MONTHLY_LIMIT si Carlos decide subirlo.
+const SEARCH_MONTHLY_LIMIT = 300;
 const SEARCH_USAGE_FILE = path.join(VAULT_DIR, '.search-usage.json');
 
 function verificarYRegistrarBusqueda() {
