@@ -325,19 +325,20 @@ const verificarYRegistrarCorreo = () => verificarYRegistrarUso(EMAIL_USAGE_FILE,
 
 const EMAIL_TOOL = {
     name: 'send_email',
-    description: 'Manda un correo real vía Resend. Por seguridad, mientras no se autorice el envío real, SIEMPRE llega al buzón de revisión de Carlos en vez del destinatario que pidas, con el destinatario real y el asunto original visibles dentro del correo — no asumas que ya le llegó al destinatario real solo porque la herramienta devolvió éxito.',
+    description: 'Manda un correo real vía Resend, opcionalmente con una imagen adjunta (ej. una maqueta ya generada). Por seguridad, mientras no se autorice el envío real, SIEMPRE llega al buzón de revisión de Carlos en vez del destinatario que pidas, con el destinatario real y el asunto original visibles dentro del correo — no asumas que ya le llegó al destinatario real solo porque la herramienta devolvió éxito.',
     input_schema: {
         type: 'object',
         properties: {
             para: { type: 'string', description: 'Destinatario real deseado (el prospecto/persona a la que este correo está dirigido) — puede que no sea a quien realmente llegue, ver descripción de la herramienta.' },
             asunto: { type: 'string', description: 'Asunto del correo.' },
             cuerpo_html: { type: 'string', description: 'Cuerpo del correo en HTML simple (párrafos, negritas, links) — no uses CSS complejo ni JavaScript.' },
+            adjuntar_imagen: { type: 'string', description: 'Ruta de una imagen YA generada (ej. vault/8-imagenes-generadas/creativa-balam/prospectos/{slug}/mockup.png) para adjuntarla al correo. Omitir si no hay imagen que adjuntar.' },
         },
         required: ['para', 'asunto', 'cuerpo_html'],
     },
 };
 
-async function ejecutarSendEmail(paraReal, asunto, cuerpoHtml) {
+async function ejecutarSendEmail(paraReal, asunto, cuerpoHtml, adjuntarImagen) {
     const apiKey = process.env.RESEND_API_KEY;
     if (!apiKey) {
         return 'RECHAZADO: RESEND_API_KEY no está configurada en el entorno — pide a un humano que cree una cuenta en resend.com y la agregue al .env del VPS.';
@@ -357,21 +358,43 @@ async function ejecutarSendEmail(paraReal, asunto, cuerpoHtml) {
         ? cuerpoHtml
         : `<p style="background:#fff3cd;padding:12px;border-radius:8px;color:#664d03;"><strong>⚠️ Correo de prueba.</strong> Este correo está redactado para <strong>${paraReal}</strong> pero se redirigió aquí porque el envío real todavía no está autorizado (ALLOW_REAL_EMAIL_SEND). Asunto real: "${asunto}".</p>${cuerpoHtml}`;
 
+    // El adjunto es solo lectura de un archivo YA generado por generate_image en esta misma
+    // corrida — no pasa por rutaEstaAutorizada porque no es una escritura, es adjuntar algo
+    // que el propio agente ya tenía permiso de crear.
+    let avisoAdjunto = '';
+    const cuerpoPeticion = { from: remitente, to: destinatarioFinal, subject: asuntoFinal, html: cuerpoFinal };
+    if (adjuntarImagen) {
+        try {
+            const rutaAbs = path.resolve(PROJECT_ROOT, adjuntarImagen);
+            if (rutaAbs !== PROJECT_ROOT && !rutaAbs.startsWith(PROJECT_ROOT + path.sep)) {
+                avisoAdjunto = `\nNo se adjuntó '${adjuntarImagen}': ruta fuera del proyecto.`;
+            } else if (!fs.existsSync(rutaAbs)) {
+                avisoAdjunto = `\nNo se adjuntó: '${adjuntarImagen}' no existe.`;
+            } else {
+                const contenidoB64 = fs.readFileSync(rutaAbs).toString('base64');
+                cuerpoPeticion.attachments = [{ filename: path.basename(adjuntarImagen), content: contenidoB64 }];
+            }
+        } catch (err) {
+            avisoAdjunto = `\nNo se adjuntó '${adjuntarImagen}': ${err.message}`;
+        }
+    }
+
     try {
         const respuesta = await fetch('https://api.resend.com/emails', {
             method: 'POST',
             headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ from: remitente, to: destinatarioFinal, subject: asuntoFinal, html: cuerpoFinal }),
-            signal: AbortSignal.timeout(15000),
+            body: JSON.stringify(cuerpoPeticion),
+            signal: AbortSignal.timeout(20000),
         });
         if (!respuesta.ok) {
             const errorTexto = await respuesta.text();
             return `ERROR (${respuesta.status}) enviando correo: ${errorTexto.slice(0, 500)}`;
         }
         const data = await respuesta.json();
-        return envioRealAutorizado
+        const conAdjunto = cuerpoPeticion.attachments ? ` Se adjuntó '${adjuntarImagen}'.` : avisoAdjunto;
+        return (envioRealAutorizado
             ? `Correo enviado de verdad a ${paraReal} (id: ${data.id ?? 'sin id'}).`
-            : `Correo de PRUEBA enviado a ${bandejaRevision} (no a ${paraReal} — el envío real no está autorizado todavía). id: ${data.id ?? 'sin id'}.`;
+            : `Correo de PRUEBA enviado a ${bandejaRevision} (no a ${paraReal} — el envío real no está autorizado todavía). id: ${data.id ?? 'sin id'}.`) + conAdjunto;
     } catch (err) {
         return `ERROR enviando correo: ${err.message}`;
     }
@@ -760,7 +783,7 @@ async function ejecutarTool(nombre, input, writePaths, dbAccess, codeRepoAccess,
         }
         case 'send_email': {
             if (!emailAccess) return 'RECHAZADO: este agente no tiene autoridad para mandar correos (falta email_access: true en su playbook).';
-            return await ejecutarSendEmail(input.para, input.asunto, input.cuerpo_html);
+            return await ejecutarSendEmail(input.para, input.asunto, input.cuerpo_html, input.adjuntar_imagen);
         }
         default:
             return `Herramienta desconocida: ${nombre}`;
