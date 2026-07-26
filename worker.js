@@ -312,6 +312,71 @@ async function ejecutarExtractBranding(url, guardarLogoEn, writePaths) {
     return `Análisis de marca de ${url}:\n\n${lineaLogo}\n\n${lineaColores}\n\nNota: estos colores vienen de lo que aparece literal en el HTML — si el sitio carga su CSS desde un archivo externo, puede que falten colores reales que solo viven ahí.`;
 }
 
+// Herramienta opcional: gateada por `email_access: true` en el playbook. Manda un correo real
+// vía Resend. 🔴 SALVAGUARDA DE CARLOS (26 julio 2026): el envío a un destinatario real de
+// verdad SOLO ocurre si ALLOW_REAL_EMAIL_SEND=true está en el entorno — sin eso, CUALQUIER
+// intento de envío se redirige automáticamente a REVIEW_EMAIL (buzón de revisión de Carlos),
+// con el destinatario y asunto reales visibles dentro del correo, para que pueda revisarlo
+// antes de que le llegue de verdad a un prospecto. Mismo patrón de seguridad que ya se usa
+// para bloquear Stripe en modo producción (ALLOW_STRIPE_LIVE_CHARGES).
+const EMAIL_MONTHLY_LIMIT = 50;
+const EMAIL_USAGE_FILE = path.join(VAULT_DIR, '.email-usage.json');
+const verificarYRegistrarCorreo = () => verificarYRegistrarUso(EMAIL_USAGE_FILE, EMAIL_MONTHLY_LIMIT);
+
+const EMAIL_TOOL = {
+    name: 'send_email',
+    description: 'Manda un correo real vía Resend. Por seguridad, mientras no se autorice el envío real, SIEMPRE llega al buzón de revisión de Carlos en vez del destinatario que pidas, con el destinatario real y el asunto original visibles dentro del correo — no asumas que ya le llegó al destinatario real solo porque la herramienta devolvió éxito.',
+    input_schema: {
+        type: 'object',
+        properties: {
+            para: { type: 'string', description: 'Destinatario real deseado (el prospecto/persona a la que este correo está dirigido) — puede que no sea a quien realmente llegue, ver descripción de la herramienta.' },
+            asunto: { type: 'string', description: 'Asunto del correo.' },
+            cuerpo_html: { type: 'string', description: 'Cuerpo del correo en HTML simple (párrafos, negritas, links) — no uses CSS complejo ni JavaScript.' },
+        },
+        required: ['para', 'asunto', 'cuerpo_html'],
+    },
+};
+
+async function ejecutarSendEmail(paraReal, asunto, cuerpoHtml) {
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
+        return 'RECHAZADO: RESEND_API_KEY no está configurada en el entorno — pide a un humano que cree una cuenta en resend.com y la agregue al .env del VPS.';
+    }
+    const chequeo = verificarYRegistrarCorreo();
+    if (!chequeo.permitido) {
+        return `RECHAZADO: límite mensual de ${EMAIL_MONTHLY_LIMIT} correos ya alcanzado (protección configurada por Carlos). Se reactiva el próximo mes.`;
+    }
+
+    const envioRealAutorizado = process.env.ALLOW_REAL_EMAIL_SEND === 'true';
+    const remitente = process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev';
+    const bandejaRevision = process.env.REVIEW_EMAIL || 'balamcozu@proton.me';
+
+    const destinatarioFinal = envioRealAutorizado ? paraReal : bandejaRevision;
+    const asuntoFinal = envioRealAutorizado ? asunto : `[PRUEBA — destinatario real: ${paraReal}] ${asunto}`;
+    const cuerpoFinal = envioRealAutorizado
+        ? cuerpoHtml
+        : `<p style="background:#fff3cd;padding:12px;border-radius:8px;color:#664d03;"><strong>⚠️ Correo de prueba.</strong> Este correo está redactado para <strong>${paraReal}</strong> pero se redirigió aquí porque el envío real todavía no está autorizado (ALLOW_REAL_EMAIL_SEND). Asunto real: "${asunto}".</p>${cuerpoHtml}`;
+
+    try {
+        const respuesta = await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ from: remitente, to: destinatarioFinal, subject: asuntoFinal, html: cuerpoFinal }),
+            signal: AbortSignal.timeout(15000),
+        });
+        if (!respuesta.ok) {
+            const errorTexto = await respuesta.text();
+            return `ERROR (${respuesta.status}) enviando correo: ${errorTexto.slice(0, 500)}`;
+        }
+        const data = await respuesta.json();
+        return envioRealAutorizado
+            ? `Correo enviado de verdad a ${paraReal} (id: ${data.id ?? 'sin id'}).`
+            : `Correo de PRUEBA enviado a ${bandejaRevision} (no a ${paraReal} — el envío real no está autorizado todavía). id: ${data.id ?? 'sin id'}.`;
+    } catch (err) {
+        return `ERROR enviando correo: ${err.message}`;
+    }
+}
+
 // Herramienta opcional: gateada por `search_access: true` en el playbook. A diferencia de
 // fetch_url (que solo lee una URL que ya conoces), esta permite DESCUBRIR URLs nuevas — es
 // el reemplazo real de "buscar en Google". Google/Bing/DuckDuckGo bloquean scraping directo
@@ -613,7 +678,7 @@ function rutaEstaAutorizada(rutaRelativa, writePaths) {
     return writePaths.some((base) => normalizada === base || normalizada.startsWith(`${base}/`));
 }
 
-async function ejecutarTool(nombre, input, writePaths, dbAccess, codeRepoAccess, webAccess, searchAccess, imageAccess, imageHqAccess) {
+async function ejecutarTool(nombre, input, writePaths, dbAccess, codeRepoAccess, webAccess, searchAccess, imageAccess, imageHqAccess, emailAccess) {
     switch (nombre) {
         case 'list_files': {
             const rutaAbs = resolverRutaSegura(input.ruta);
@@ -693,6 +758,10 @@ async function ejecutarTool(nombre, input, writePaths, dbAccess, codeRepoAccess,
             if (!imageAccess) return 'RECHAZADO: este agente no tiene autoridad para generar imágenes (falta image_access: true en su playbook).';
             return await ejecutarGenerateImage(input.prompt, input.ruta, input.calidad, writePaths, imageHqAccess);
         }
+        case 'send_email': {
+            if (!emailAccess) return 'RECHAZADO: este agente no tiene autoridad para mandar correos (falta email_access: true en su playbook).';
+            return await ejecutarSendEmail(input.para, input.asunto, input.cuerpo_html);
+        }
         default:
             return `Herramienta desconocida: ${nombre}`;
     }
@@ -753,11 +822,13 @@ async function procesarJob(job) {
     const searchAccess = /search_access:\s*true/i.test(playbookContenido);
     const imageAccess = /image_access:\s*true/i.test(playbookContenido);
     const imageHqAccess = /image_hq_access:\s*true/i.test(playbookContenido);
+    const emailAccess = /email_access:\s*true/i.test(playbookContenido);
     let herramientas = dbAccess ? [...TOOLS, SQL_TOOL, AIRTABLE_TOOL] : [...TOOLS];
     if (codeRepoAccess) herramientas = [...herramientas, ...CODE_REPO_TOOLS];
     if (webAccess) herramientas = [...herramientas, WEB_FETCH_TOOL, BRAND_EXTRACT_TOOL];
     if (searchAccess) herramientas = [...herramientas, SEARCH_TOOL];
     if (imageAccess) herramientas = [...herramientas, IMAGE_GEN_TOOL];
+    if (emailAccess) herramientas = [...herramientas, EMAIL_TOOL];
 
     const matchProvider = playbookContenido.match(/provider:\s*(\w+)/);
     const provider = matchProvider ? matchProvider[1].trim().toLowerCase() : 'anthropic';
@@ -780,7 +851,7 @@ async function procesarJob(job) {
         ? '\n\nEste rol requiere voz propia: varía tu redacción y estructura, evita sonar robótico o repetitivo. No sacrifiques la fidelidad a las fuentes por creatividad.'
         : '';
 
-    console.log(`🧠 Invocando a ${provider} usando el rol de ${agente} (modo ${modoCreativo ? 'creativo' : 'preciso'}, escritura: ${writePaths.join(', ') || 'ninguna'}, db_access: ${dbAccess}, code_repo_access: ${codeRepoAccess}, web_access: ${webAccess}, search_access: ${searchAccess}, image_access: ${imageAccess}) para el proyecto ${proyecto}...`);
+    console.log(`🧠 Invocando a ${provider} usando el rol de ${agente} (modo ${modoCreativo ? 'creativo' : 'preciso'}, escritura: ${writePaths.join(', ') || 'ninguna'}, db_access: ${dbAccess}, code_repo_access: ${codeRepoAccess}, web_access: ${webAccess}, search_access: ${searchAccess}, image_access: ${imageAccess}, email_access: ${emailAccess}) para el proyecto ${proyecto}...`);
 
     const instruccionSQL = dbAccess
         ? '\n\nTambién tienes acceso a run_sql para ejecutar SQL real contra la base de datos de staging. Sentencias destructivas (DROP/DELETE/ALTER/TRUNCATE) son rechazadas automáticamente por el sistema; si necesitas una, repórtala en tu respuesta final para que un humano la revise, no intentes forzarla.\n\nTambién tienes acceso a run_airtable para llamar a la API REST de Airtable (schema y registros) contra la base configurada en AIRTABLE_BASE_ID. El método DELETE es rechazado automáticamente por el sistema; si necesitas uno, repórtalo en tu respuesta final para que un humano lo revise, no intentes forzarlo.'
@@ -802,13 +873,17 @@ async function procesarJob(job) {
         ? `\n\nTambién tienes acceso a generate_image para crear una imagen real desde una descripción de texto y guardarla como PNG dentro de tus rutas autorizadas. Escribe el prompt en inglés (mejor calidad). Por defecto se genera en calidad baja/económica — no pidas calidad "alta" salvo que la tarea te lo pida explícitamente, y aun así solo funciona si tu playbook tiene image_hq_access${imageHqAccess ? ' (SÍ lo tienes)' : ' (NO lo tienes — cualquier solicitud de calidad alta se genera en baja automáticamente)'}.`
         : '';
 
+    const instruccionEmail = emailAccess
+        ? '\n\nTambién tienes acceso a send_email para mandar un correo real vía Resend. 🔴 IMPORTANTE: mientras el envío real no esté autorizado por Carlos, el correo NUNCA llega al destinatario real que pongas — se redirige automáticamente a un buzón de revisión, con el destinatario y asunto reales marcados adentro. No reportes en tu resumen que "el correo ya le llegó al prospecto" — repórtalo como lo que es: un correo de prueba enviado al buzón de revisión, pendiente de que Carlos lo revise y autorice el envío real.'
+        : '';
+
     // Bloque estático (idéntico para todas las tareas de este agente): se marca con
     // cache_control para que la API lo cachee entre turnos de una misma corrida y entre
     // corridas distintas del mismo rol, en vez de volver a cobrarlo entero cada vez.
     const systemEstatico = `Eres un agente de IA especializado que forma parte de una organización virtual.
         Debes actuar estrictamente bajo los siguientes estatutos y playbooks.
         Tienes acceso a herramientas (list_files, read_file, write_file) para operar sobre el filesystem real del vault. Úsalas para cumplir tu misión: no te limites a describir lo que harías, hazlo.
-        write_file solo funciona dentro de tus rutas autorizadas: ${writePaths.join(', ') || 'ninguna'}. Cualquier intento fuera de esas rutas será rechazado automáticamente.${instruccionVoz}${instruccionSQL}${instruccionCodigo}${instruccionWeb}${instruccionSearch}${instruccionImagen}
+        write_file solo funciona dentro de tus rutas autorizadas: ${writePaths.join(', ') || 'ninguna'}. Cualquier intento fuera de esas rutas será rechazado automáticamente.${instruccionVoz}${instruccionSQL}${instruccionCodigo}${instruccionWeb}${instruccionSearch}${instruccionImagen}${instruccionEmail}
 
         === ESTATUTOS DEL SISTEMA (HOUSE RULES) ===
         ${houseRules}
@@ -932,7 +1007,7 @@ async function procesarJob(job) {
 
                 let resultado;
                 try {
-                    resultado = await ejecutarTool(toolCall.function.name, input, writePaths, dbAccess, codeRepoAccess, webAccess, searchAccess, imageAccess, imageHqAccess);
+                    resultado = await ejecutarTool(toolCall.function.name, input, writePaths, dbAccess, codeRepoAccess, webAccess, searchAccess, imageAccess, imageHqAccess, emailAccess);
                 } catch (err) {
                     resultado = `ERROR: ${err.message}`;
                 }
@@ -986,7 +1061,7 @@ async function procesarJob(job) {
 
                 let resultado;
                 try {
-                    resultado = await ejecutarTool(bloque.name, bloque.input, writePaths, dbAccess, codeRepoAccess, webAccess, searchAccess, imageAccess, imageHqAccess);
+                    resultado = await ejecutarTool(bloque.name, bloque.input, writePaths, dbAccess, codeRepoAccess, webAccess, searchAccess, imageAccess, imageHqAccess, emailAccess);
                 } catch (err) {
                     resultado = `ERROR: ${err.message}`;
                 }
