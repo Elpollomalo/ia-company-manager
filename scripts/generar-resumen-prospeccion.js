@@ -3,6 +3,7 @@
 // Se puede volver a correr cuando se agreguen zonas nuevas: `node scripts/generar-resumen-prospeccion.js`
 const fs = require('fs');
 const path = require('path');
+const { notificar } = require('./telegram-notify');
 
 const BASE_DIR = path.join(__dirname, '..', 'vault', '7-prospeccion-negocios');
 const OUT_FILE = path.join(BASE_DIR, 'RESUMEN-GENERAL.md');
@@ -64,3 +65,5 @@ try {
 } catch (err) {
     console.warn(`No se pudo copiar a ${COPIA_FILEBROWSER}: ${err.message}`);
 }
+
+notificar(`✅ resumen-prospeccion: ${totalNegocios} negocios en ${filas.length} zona${filas.length === 1 ? '' : 's'}.`);

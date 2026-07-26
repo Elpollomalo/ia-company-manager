@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
+const { notificar } = require('./scripts/telegram-notify');
 require('dotenv').config();
 
 const execFileAsync = promisify(execFile);
@@ -1137,5 +1138,17 @@ async function procesarJob(job) {
 
 const worker = new Worker('cola-de-agentes', (job) => ejecutarSerializadoPorProyecto(job.data.proyecto, () => procesarJob(job)), { connection, concurrency: WORKER_CONCURRENCY });
 
-worker.on('completed', (job) => console.log(`✅ Tarea ${job.id} procesada con éxito por la IA.`));
-worker.on('failed', (job, err) => console.error(`❌ Tarea ${job.id} falló de forma crítica:`, err.message));
+worker.on('completed', (job) => {
+    console.log(`✅ Tarea ${job.id} procesada con éxito por la IA.`);
+    const { agente, proyecto } = job.data || {};
+    const archivo = job.returnvalue?.archivoGenerado;
+    notificar(
+        `✅ ${agente || '?'} · ${proyecto || '?'}\nTarea ${job.id} lista.` +
+        (archivo ? `\nArchivo: vault/1-desk/${archivo}` : ''),
+    );
+});
+worker.on('failed', (job, err) => {
+    console.error(`❌ Tarea ${job.id} falló de forma crítica:`, err.message);
+    const { agente, proyecto } = job?.data || {};
+    notificar(`❌ ${agente || '?'} · ${proyecto || '?'}\nTarea ${job?.id} falló: ${err.message}`);
+});
