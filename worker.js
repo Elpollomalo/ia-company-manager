@@ -332,7 +332,7 @@ const EMAIL_TOOL = {
             para: { type: 'string', description: 'Destinatario real deseado (el prospecto/persona a la que este correo está dirigido) — puede que no sea a quien realmente llegue, ver descripción de la herramienta.' },
             asunto: { type: 'string', description: 'Asunto del correo.' },
             cuerpo_html: { type: 'string', description: 'Cuerpo del correo en HTML simple (párrafos, negritas, links) — no uses CSS complejo ni JavaScript.' },
-            adjuntar_imagen: { type: 'string', description: 'Ruta de una imagen YA generada (ej. vault/8-imagenes-generadas/creativa-balam/prospectos/{slug}/mockup.png) para adjuntarla al correo. Omitir si no hay imagen que adjuntar.' },
+            adjuntar_imagen: { type: 'string', description: 'Ruta de una imagen YA generada (ej. vault/8-imagenes-generadas/creativa-balam/prospectos/{slug}/mockup.png) para adjuntarla al correo. Si la das, PON en tu cuerpo_html una etiqueta <img src="cid:imagen-embebida" style="max-width:100%"> en el lugar donde quieras que se vea la imagen dentro del cuerpo del correo (no solo como archivo aparte) — el cid es siempre literalmente "imagen-embebida", no inventes otro. Omitir el parámetro si no hay imagen que adjuntar.' },
         },
         required: ['para', 'asunto', 'cuerpo_html'],
     },
@@ -372,7 +372,10 @@ async function ejecutarSendEmail(paraReal, asunto, cuerpoHtml, adjuntarImagen) {
                 avisoAdjunto = `\nNo se adjuntó: '${adjuntarImagen}' no existe.`;
             } else {
                 const contenidoB64 = fs.readFileSync(rutaAbs).toString('base64');
-                cuerpoPeticion.attachments = [{ filename: path.basename(adjuntarImagen), content: contenidoB64 }];
+                // content_id fijo y predecible ('imagen-embebida') para que el agente pueda
+                // referenciarla dentro del HTML como <img src="cid:imagen-embebida"> y se vea
+                // la imagen dentro del cuerpo del correo, no solo como archivo aparte.
+                cuerpoPeticion.attachments = [{ filename: path.basename(adjuntarImagen), content: contenidoB64, content_id: 'imagen-embebida' }];
             }
         } catch (err) {
             avisoAdjunto = `\nNo se adjuntó '${adjuntarImagen}': ${err.message}`;
@@ -897,7 +900,7 @@ async function procesarJob(job) {
         : '';
 
     const instruccionEmail = emailAccess
-        ? '\n\nTambién tienes acceso a send_email para mandar un correo real vía Resend. 🔴 IMPORTANTE: mientras el envío real no esté autorizado por Carlos, el correo NUNCA llega al destinatario real que pongas — se redirige automáticamente a un buzón de revisión, con el destinatario y asunto reales marcados adentro. No reportes en tu resumen que "el correo ya le llegó al prospecto" — repórtalo como lo que es: un correo de prueba enviado al buzón de revisión, pendiente de que Carlos lo revise y autorice el envío real.'
+        ? '\n\nTambién tienes acceso a send_email para mandar un correo real vía Resend. Si adjuntas una imagen con adjuntar_imagen, no basta con mencionarla en el texto — pon <img src="cid:imagen-embebida" style="max-width:100%"> en tu cuerpo_html donde quieras que se vea, así queda visible dentro del correo, no solo como archivo aparte. 🔴 IMPORTANTE: mientras el envío real no esté autorizado por Carlos, el correo NUNCA llega al destinatario real que pongas — se redirige automáticamente a un buzón de revisión, con el destinatario y asunto reales marcados adentro. No reportes en tu resumen que "el correo ya le llegó al prospecto" — repórtalo como lo que es: un correo de prueba enviado al buzón de revisión, pendiente de que Carlos lo revise y autorice el envío real.'
         : '';
 
     // Bloque estático (idéntico para todas las tareas de este agente): se marca con
