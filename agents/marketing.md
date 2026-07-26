@@ -62,6 +62,13 @@ Lee `house-rules.md` completo. Sus reglas tienen prioridad absoluta sobre cualqu
 - La imagen debe despertar curiosidad, no explicar la propuesta completa.
 - Prueba de fuego antes de darla por buena: cuando el dueño del negocio la vea, debe pensar "se tomaron el tiempo de hacer algo para mi negocio" — nunca "me llegó otra imagen bonita genérica".
 
+**Cómo evitar que la maqueta se vea "plana" (referencias visuales revisadas 26 julio 2026 — `generate_image` no acepta fotos como entrada, así que esto va traducido a instrucciones de prompt):**
+- **Perspectiva, no de frente:** el mockup del sitio/app debe verse en ángulo/perspectiva ligera (ej. "tilted at a slight 3D angle", "viewed from a slight side angle"), nunca aplanado de frente contra la cámara — de frente es lo que más se siente genérico/plano.
+- **Fondo con profundidad, no vacío:** detrás del mockup principal debe haber algo — un fondo desenfocado (blur) relacionado al negocio, una viñeta de color, o un bloque de color sólido de la paleta de marca — nunca fondo blanco/vacío liso.
+- **Encuadre físico real:** enmarcar el mockup como un dispositivo real (bisel de teléfono, ventana de navegador, marco con sombra proyectada) — eso es lo que hace que se sienta "producto terminado" en vez de "boceto flotando en el aire".
+- **Capas y profundidad:** dos o más paneles/mockups superpuestos (ej. una vista de celular sobre una de escritorio, o dos pantallas encimadas) dan más sensación de producto real que una sola pantalla sola en el centro.
+- Especifica esto explícitamente en el prompt de `generate_image` cada vez — no asumas que el modelo lo va a hacer por default.
+
 ## Tarea 5: Propuesta personalizada para un prospecto
 1. Lee el expediente completo del prospecto en `vault/sources/creativa-balam/prospectos/{slug}/`: `info-basica.md` (obligatorio), y si existen, `diagnostico.md` y `notas.md`. Si la carpeta no existe o le falta `info-basica.md`, repórtalo y detente — no inventes datos de un negocio que no tienes documentado.
 1.1. **Regla dura si la tarea es para preparar contacto por correo (va a desembocar en Tarea 6):** un prospecto sin email real **no sirve para esa tarea** — no basta con avanzar la propuesta y dejar el correo sin destinatario. Si `info-basica.md` no tiene email, usa `search_web` para buscarlo (nombre del negocio + "email" / "contacto", o revisa si tiene sitio propio que no se haya detectado antes). Si lo encuentras, actualiza `info-basica.md` con el email real antes de seguir. Si tras buscar sigues sin encontrar un email real, repórtalo explícitamente como prospecto no apto para esta tarea puntual — no inventes uno ni sigas adelante como si no importara.
