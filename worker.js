@@ -700,6 +700,37 @@ function resolverRutaSegura(rutaRelativa) {
     return rutaAbsoluta;
 }
 
+// Mapea una ruta relativa del vault (ej. 'vault/5-bot-logs/tourbrain/2026-07-26.md')
+// al enlace directo de FileBrowser, si esa ruta cae dentro de una de las
+// carpetas que el compose de FileBrowser expone bajo /srv (ver
+// /root/docker/filebrowser/docker-compose.yml). Si no cae en ninguna
+// (ej. vault/1-desk, que es solo el resumen interno de la corrida y no está
+// montado), regresa null — no todo entregable tiene que ser enlazable.
+const FILEBROWSER_BASE_URL = 'https://archivos.creativabalam.com.mx/files';
+const FILEBROWSER_MAPEOS = [
+    ['vault/5-bot-logs/gnga-web3/reportes', 'bots/gnga-web3/reportes'],
+    ['vault/5-bot-logs/gnga-web3', 'bots/gnga-web3/preguntas-log'],
+    ['vault/5-bot-logs/tourbrain/reportes', 'bots/tourbrain/reportes'],
+    ['vault/5-bot-logs/tourbrain', 'bots/tourbrain/preguntas-log'],
+    ['vault/5-bot-logs/balam-website/reportes', 'bots/balam-website/reportes'],
+    ['vault/5-bot-logs/balam-website', 'bots/balam-website/preguntas-log'],
+    ['vault/7-investigacion-mercado', 'investigacion-mercado'],
+    ['vault/7-prospeccion-negocios', 'prospeccion-negocios'],
+    ['vault/8-imagenes-generadas', 'imagenes-generadas'],
+    ['vault/sources/creativa-balam/prospectos', 'marketing/prospectos-creativa-balam'],
+].sort((a, b) => b[0].length - a[0].length); // más específico primero (ej. .../reportes antes que el padre)
+
+function enlaceFileBrowser(rutaRelativaVault) {
+    const normalizada = String(rutaRelativaVault || '').replace(/^\.\//, '').replace(/\/+$/, '');
+    for (const [prefijoVault, prefijoSrv] of FILEBROWSER_MAPEOS) {
+        if (normalizada === prefijoVault || normalizada.startsWith(`${prefijoVault}/`)) {
+            const resto = normalizada.slice(prefijoVault.length);
+            return `${FILEBROWSER_BASE_URL}/${prefijoSrv}${resto}`;
+        }
+    }
+    return null;
+}
+
 function rutaEstaAutorizada(rutaRelativa, writePaths) {
     const normalizada = rutaRelativa.replace(/^\.\//, '').replace(/\/+$/, '');
     return writePaths.some((base) => normalizada === base || normalizada.startsWith(`${base}/`));
@@ -1133,7 +1164,24 @@ async function procesarJob(job) {
 
     await commitVault(`${agente} (${provider}) — ${proyecto} — tarea ${job.id}`);
 
-    return { status: 'success', archivoGenerado: nombreArchivoSalida, herramientasInvocadas: bitacoraHerramientas.length };
+    // Entregables reales enlazables en FileBrowser (no el resumen interno de
+    // vault/1-desk) — cualquier write_file/generate_image que haya tenido
+    // éxito y caiga dentro de una carpeta expuesta por FileBrowser. Carlos
+    // pidió esto explícitamente (26 julio 2026): poder entrar desde
+    // FileBrowser al reporte/entregable real que avisa Telegram.
+    const enlacesEntregables = [...new Set(
+        bitacoraHerramientas
+            .filter((b) => (b.herramienta === 'write_file' || b.herramienta === 'generate_image') && !String(b.resultado).startsWith('RECHAZADO'))
+            .map((b) => enlaceFileBrowser(b.input.ruta))
+            .filter(Boolean),
+    )];
+
+    return {
+        status: 'success',
+        archivoGenerado: nombreArchivoSalida,
+        herramientasInvocadas: bitacoraHerramientas.length,
+        enlacesEntregables,
+    };
 }
 
 const worker = new Worker('cola-de-agentes', (job) => ejecutarSerializadoPorProyecto(job.data.proyecto, () => procesarJob(job)), { connection, concurrency: WORKER_CONCURRENCY });
@@ -1142,10 +1190,15 @@ worker.on('completed', (job) => {
     console.log(`✅ Tarea ${job.id} procesada con éxito por la IA.`);
     const { agente, proyecto } = job.data || {};
     const archivo = job.returnvalue?.archivoGenerado;
-    notificar(
-        `✅ ${agente || '?'} · ${proyecto || '?'}\nTarea ${job.id} lista.` +
-        (archivo ? `\nArchivo: vault/1-desk/${archivo}` : ''),
-    );
+    const enlaces = job.returnvalue?.enlacesEntregables || [];
+    let mensaje = `✅ ${agente || '?'} · ${proyecto || '?'}\nTarea ${job.id} lista.`;
+    if (enlaces.length) {
+        // Máximo 3 para no mandar un mensaje gigante si el agente escribió muchos archivos.
+        mensaje += `\n${enlaces.slice(0, 3).join('\n')}`;
+    } else if (archivo) {
+        mensaje += `\nArchivo: vault/1-desk/${archivo}`;
+    }
+    notificar(mensaje);
 });
 worker.on('failed', (job, err) => {
     console.error(`❌ Tarea ${job.id} falló de forma crítica:`, err.message);
