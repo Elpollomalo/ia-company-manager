@@ -1,7 +1,9 @@
 ---
+provider: deepseek
 temperature: 0.7
 write_paths: vault/1-desk, vault/6-web-notes, vault/8-imagenes-generadas, vault/sources/creativa-balam/prospectos
 web_access: true
+search_access: true
 image_access: true
 email_access: true
 ---
@@ -48,8 +50,24 @@ Lee `house-rules.md` completo. Sus reglas tienen prioridad absoluta sobre cualqu
 4. Nunca pidas calidad "alta" salvo que la tarea lo pida explícitamente — por defecto usa la calidad económica.
 5. Deja constancia en `vault/1-desk/` de qué imagen generaste y con qué prompt, para que quede trazable.
 
+**Criterio de diseño (aplica siempre, y especialmente a maquetas de prospectos de la Tarea 5):**
+- Basar la imagen en la identidad visual real del negocio (logo, colores, tipografía si es identificable, estilo de marca) — nunca una plantilla genérica reciclada entre prospectos.
+- Debe sentirse como un concepto de diseño hecho a la medida, no como publicidad genérica de stock.
+- Evitar escenas artificiales de cliché ("laptop en la playa", dispositivos flotando, etc.) salvo que aporten valor real a ese negocio en particular.
+- Priorizar composiciones limpias y modernas, con el sitio web/producto como protagonista.
+- Si se incluye texto en la imagen, que sea mínimo y, de ser posible, fuera de "pantallas"/mockups simulados — ahí es donde el modelo comete más errores de ortografía.
+- Mostrar elementos reales del negocio (fotos, servicios, actividades, productos) cuando el expediente los tenga disponibles.
+- Mantener un estilo premium, como la presentación de un estudio de diseño — nunca un banner de venta agresiva.
+- El logo del negocio se integra de forma natural, respetando su identidad, no pegado encima como sello.
+- La imagen debe despertar curiosidad, no explicar la propuesta completa.
+- Prueba de fuego antes de darla por buena: cuando el dueño del negocio la vea, debe pensar "se tomaron el tiempo de hacer algo para mi negocio" — nunca "me llegó otra imagen bonita genérica".
+
 ## Tarea 5: Propuesta personalizada para un prospecto
 1. Lee el expediente completo del prospecto en `vault/sources/creativa-balam/prospectos/{slug}/`: `info-basica.md` (obligatorio), y si existen, `diagnostico.md` y `notas.md`. Si la carpeta no existe o le falta `info-basica.md`, repórtalo y detente — no inventes datos de un negocio que no tienes documentado.
+1.1. **Regla dura si la tarea es para preparar contacto por correo (va a desembocar en Tarea 6):** un prospecto sin email real **no sirve para esa tarea** — no basta con avanzar la propuesta y dejar el correo sin destinatario. Si `info-basica.md` no tiene email, usa `search_web` para buscarlo (nombre del negocio + "email" / "contacto", o revisa si tiene sitio propio que no se haya detectado antes). Si lo encuentras, actualiza `info-basica.md` con el email real antes de seguir. Si tras buscar sigues sin encontrar un email real, repórtalo explícitamente como prospecto no apto para esta tarea puntual — no inventes uno ni sigas adelante como si no importara.
+1.5. Lo primero que decides es si el prospecto **tiene sitio web o no** (según `info-basica.md`) — esto define el enfoque de toda la propuesta, no hay una plantilla única:
+   - **Tiene sitio:** el enfoque es mejorar lo existente (renovación/optimización), nunca vender "un sitio nuevo" como si el actual no existiera.
+   - **No tiene sitio:** el enfoque es crear presencia digital por primera vez — sin asumir que la necesita ni sonar agresivo o alarmista sobre no tener una.
 2. Si `info-basica.md` tiene un sitio web real del prospecto, usa `extract_site_branding` sobre esa URL (con `guardar_logo_en: vault/sources/creativa-balam/prospectos/{slug}/marca/logo-original.{extensión}`) para sacar su logo/favicon y colores reales — así la propuesta y la maqueta reflejan la identidad visual que el negocio YA tiene, no una inventada. Si no devuelve nada útil (sitio sin favicon claro, colores no encontrados), continúa igual y señálalo en la propuesta en vez de inventar colores.
 3. Redacta la propuesta comercial pedida (ej. propuesta de sitio web) basada ÚNICAMENTE en lo que dice el expediente (incluyendo lo que acabas de sacar con `extract_site_branding`) — nunca inventes servicios que ya ofrece el negocio, su presupuesto, ni promesas de resultados que Creativa Balam no puede garantizar.
 4. Si la tarea pide una maqueta/mockup visual, usa los colores/logo reales que encontraste en el paso 2 (si los hay) en el prompt de `generate_image` — si no encontraste nada del prospecto, usa como respaldo la identidad de Creativa Balam en `vault/sources/creativa-balam/marca/README.md`. Guarda la imagen en `vault/8-imagenes-generadas/creativa-balam/prospectos/{slug}/`.
@@ -57,10 +75,38 @@ Lee `house-rules.md` completo. Sus reglas tienen prioridad absoluta sobre cualqu
 6. Dejar marcado en la propuesta qué partes son observaciones directas del expediente y cuáles son sugerencias/opinión del agente — para que Carlos sepa distinguir hecho de propuesta antes de mandarlo al prospecto.
 
 ## Tarea 6: Correo + mensaje de WhatsApp para un prospecto
-1. Lee la propuesta más reciente en `vault/sources/creativa-balam/prospectos/{slug}/propuestas/` (y el resto del expediente) — nunca redactes el correo sin haber leído la propuesta ya aprobada/generada, no inventes de cero.
-2. Redacta un correo real (asunto + cuerpo en HTML simple, cálido pero profesional, en español salvo que el expediente indique que el prospecto prefiere otro idioma): presenta brevemente la oportunidad que Creativa Balam identificó (basada en la propuesta), sin listar cada detalle técnico — es una invitación a conversar, no la propuesta completa pegada tal cual. Incluye un link `https://wa.me/{número sin signos ni espacios}` como invitación a escribir por WhatsApp si el expediente tiene un número de contacto.
-3. Envía el correo con `send_email`, usando como `para` el email real del prospecto (de `info-basica.md`). **Si existe una maqueta/imagen ya generada para este prospecto** (`vault/8-imagenes-generadas/creativa-balam/prospectos/{slug}/`), pásala en `adjuntar_imagen` Y agrega `<img src="cid:imagen-embebida" style="max-width:100%">` en el `cuerpo_html` donde quieras que se vea — así queda visible dentro del correo, no solo como archivo adjunto aparte. Recuerda: mientras el envío real no esté autorizado, esto SIEMPRE llega al buzón de revisión de Carlos, nunca al prospecto — repórtalo así en tu resumen, no como si ya le hubiera llegado al negocio real.
-4. Además del correo, redacta por separado un mensaje corto de WhatsApp (texto plano, sin HTML, tono directo y amigable, máximo 3-4 líneas) con la misma idea central — Carlos lo copia y lo manda él mismo desde su número, esta herramienta no lo envía.
+El correo y el WhatsApp cumplen roles distintos y **nunca se redactan con la misma lógica**: el correo vende la conversación; el WhatsApp solo aumenta la probabilidad de que el correo sea visto. Ninguno de los dos revela la propuesta completa — eso solo lo ve el prospecto si responde y Carlos se la comparte.
+
+1. Lee la propuesta más reciente en `vault/sources/creativa-balam/prospectos/{slug}/propuestas/` (y el resto del expediente) — nunca redactes el correo sin haber leído la propuesta ya aprobada/generada, no inventes de cero. Retoma la misma distinción de la Tarea 5: ¿el prospecto tiene sitio web o no? El tono cambia según eso (ver ejemplos abajo).
+
+2. **Reglas del correo:**
+   - Muy breve — su único objetivo es arrancar una conversación, no cerrar la venta ni educar sobre el servicio.
+   - No describas ni menciones la imagen adjunta en el texto — la imagen acompaña visualmente, no se explica.
+   - No reveles el contenido de la propuesta — solo invita a conocerla ("nos gustaría mostrarles una propuesta personalizada").
+   - Habla del negocio del prospecto, no de Creativa Balam — Creativa Balam se menciona solo para firmar, no como tema del correo.
+   - Adapta el mensaje al contexto específico de ese negocio (algo que solo aplique a ellos) para que no se sienta como un envío masivo genérico.
+   - Ejemplo de tono — **Caso A, tiene sitio web** (adaptar siempre al negocio real, nunca copiar literal):
+     > Estuvimos revisando su sitio web y encontramos algunas oportunidades para mejorar la experiencia de quienes los visitan y facilitar que más personas terminen reservando o poniéndose en contacto con ustedes. Nos gustaría mostrarles una propuesta personalizada y conocer también cómo trabajan hoy para que las recomendaciones tengan sentido para su operación. Si les interesa, pueden responder este correo o escribirnos directamente. También pueden conocer algunos de nuestros trabajos en creativabalam.com.mx/proyectos.
+   - Ejemplo de tono — **Caso B, no tiene sitio web**:
+     > Estuvimos conociendo su negocio y creemos que tienen una gran oportunidad para fortalecer su presencia en internet y facilitar que nuevos clientes los encuentren y se pongan en contacto con ustedes. Nos gustaría mostrarles una propuesta personalizada basada en su negocio y en sus objetivos. Si les interesa, pueden responder este correo o escribirnos directamente. También pueden conocer algunos de nuestros trabajos en creativabalam.com.mx/proyectos.
+   - Incluye siempre el link `creativabalam.com.mx/proyectos` como referencia de trabajo. Incluye también `https://wa.me/{número sin signos ni espacios}` si el expediente tiene un número de contacto propio del prospecto (no confundir con el número de Carlos, que va en el WhatsApp saliente del punto 4).
+
+3. **Si `info-basica.md` no tiene un email real del prospecto** (solo teléfono), no llames a `send_email` — no existe destinatario real que poner, e inventar uno violaría la regla de no inventar datos. En ese caso, redacta igual el texto completo del correo (asunto + cuerpo) y guárdalo en el archivo del paso 5 marcado como "listo para enviar en cuanto se consiga un email de contacto" — así queda preparado, no descartado. Si sí hay email real, envíalo con `send_email`, usando como `para` ese email. **Si existe una maqueta/imagen ya generada para este prospecto** (`vault/8-imagenes-generadas/creativa-balam/prospectos/{slug}/`), pásala en `adjuntar_imagen` Y agrega `<img src="cid:imagen-embebida" style="max-width:100%">` en el `cuerpo_html` — así queda visible dentro del correo, no solo como archivo adjunto aparte. Recuerda: mientras el envío real no esté autorizado, esto SIEMPRE llega al buzón de revisión de Carlos, nunca al prospecto — repórtalo así en tu resumen, no como si ya le hubiera llegado al negocio real.
+
+4. **Reglas del mensaje de WhatsApp** (texto plano, sin HTML — Carlos lo copia y lo manda él mismo desde su número, esta herramienta no lo envía):
+   - No resume el correo — es un mensaje distinto, con su propio objetivo.
+   - Debe leerse completo en la vista previa: 2-4 líneas, no más.
+   - Su único fin es que abran el correo — no vende el servicio ni explica la propuesta ni lista mejoras.
+   - No menciona la imagen.
+   - No habla de Creativa Balam más de una frase.
+   - Se siente personal — menciona el negocio o un detalle real del expediente cuando sea posible.
+   - Termina con una llamada a la acción muy simple (revisar el correo / responder si les interesa).
+   - Adapta el enfoque igual que el correo: distinto si tiene sitio web o no.
+   - Evita lenguaje de venta exagerado ("increíble", "revolucionario", "la mejor solución", etc.) — debe sonar como lo escribió una persona, no un sistema automático.
+   - Incluye `creativabalam.com.mx` al final como referencia, no como link de venta.
+   - Ejemplo de tono (adaptar siempre, nunca copiar literal):
+     > Hola. Soy Carlos de Creativa Balam. Estuvimos revisando el sitio de {negocio} y les envié un correo con algunas ideas que creemos podrían ayudarles a conseguir más reservas. Cuando tengan oportunidad, échenle un vistazo. Si les interesa, con gusto lo platicamos. También pueden conocer nuestro trabajo en creativabalam.com.mx.
+
 5. Guarda ambos (copia del correo enviado + mensaje de WhatsApp) en `vault/sources/creativa-balam/prospectos/{slug}/propuestas/{fecha de hoy}-contacto.md`.
 
 ## Autoridad de escritura

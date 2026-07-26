@@ -30,6 +30,13 @@ const PREGUNTAS_AUDITORIA = {
         '¿Cómo hago una reserva?',
         'Do you have any nightlife or bar recommendations?',
     ],
+    'balam-website': [
+        '¿Qué servicios ofrecen?',
+        '¿Cuánto cuesta un sitio web?',
+        'Quiero contactarlos, ¿cómo le hago?',
+        'What services do you offer?',
+        '¿Tienen experiencia con apps de reservas o catálogos?',
+    ],
 };
 
 const VAULT_LOGS_DIR = path.join(__dirname, '..', 'vault', '5-bot-logs');
