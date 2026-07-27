@@ -713,6 +713,7 @@ const FILEBROWSER_MAPEOS = [
     ['vault/5-bot-logs/tourbrain/reportes', 'bots/tourbrain/reportes'],
     ['vault/5-bot-logs/tourbrain', 'bots/tourbrain/preguntas-log'],
     ['vault/5-bot-logs/balam-website/reportes', 'bots/balam-website/reportes'],
+    ['vault/5-bot-logs/balam-website/prospectos', 'bots/balam-website/prospectos'],
     ['vault/5-bot-logs/balam-website', 'bots/balam-website/preguntas-log'],
     ['vault/7-investigacion-mercado', 'investigacion-mercado'],
     ['vault/7-prospeccion-negocios', 'prospeccion-negocios'],
