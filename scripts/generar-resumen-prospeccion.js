@@ -66,4 +66,11 @@ try {
     console.warn(`No se pudo copiar a ${COPIA_FILEBROWSER}: ${err.message}`);
 }
 
-notificar(`✅ resumen-prospeccion: ${totalNegocios} negocios en ${filas.length} zona${filas.length === 1 ? '' : 's'}.`);
+// El aviso lleva el enlace de FileBrowser al resumen real: antes solo decía el conteo y no
+// había forma de entrar a leerlo desde Telegram (Carlos, 30 julio 2026: "ese resumen de
+// prospeccion como entro a ellos??"). El archivo ya se copiaba a /archivos, solo faltaba el link.
+notificar(
+    `✅ resumen-prospeccion: ${totalNegocios} negocios en ${filas.length} zona${filas.length === 1 ? '' : 's'}.\n` +
+    `Resumen general (todas las zonas):\nhttps://archivos.creativabalam.com.mx/files/RESUMEN-GENERAL.md\n` +
+    `Informes por zona:\nhttps://archivos.creativabalam.com.mx/files/prospeccion-negocios`
+);

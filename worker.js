@@ -1291,6 +1291,33 @@ async function procesarJob(job) {
     };
 }
 
+// Qué produce cada agente, en lenguaje humano. El nombre técnico del agente
+// ("marketing", "auditoria-web") no le dice nada a Carlos cuando le llega el
+// aviso al celular — pidió explícitamente saber de qué es cada cron
+// (30 julio 2026: "hay informes que no puedo leer y no sé de qué son").
+// Un agente sin entrada aquí cae a su propio nombre, no rompe nada.
+const DESCRIPCION_AGENTE = {
+    'marketing': '🌐 Revisión del sitio en producción',
+    'prospectores': '🔎 Búsqueda de negocios (crudo)',
+    'informes-prospeccion': '📋 Informe de negocios prospectados',
+    'auditoria-web': '⚡ Auditoría de velocidad de sitios (PageSpeed)',
+    'auditoria-bots': '🤖 Auditoría de los bots de chat',
+    'investigadores': '📚 Investigación de mercado',
+    'disenadores': '🎨 Propuesta de diseño',
+    'programadores-borrador': '💻 Código (borrador, sin subir)',
+    'programadores-revision': '🔍 Revisión de código',
+    'criticos': '🧐 Revisión crítica',
+    'editores': '✍️ Edición de texto',
+    'auditoria': '🗂️ Auditoría de coherencia del vault',
+    'catalogadores': '🏷️ Catalogación',
+    'cartografos': '🗺️ Mapeo de información',
+    'scouts': '🛰️ Recolección de fuentes',
+};
+
+function etiquetaAgente(agente) {
+    return DESCRIPCION_AGENTE[agente] || agente || '?';
+}
+
 const worker = new Worker('cola-de-agentes', (job) => ejecutarSerializadoPorProyecto(job.data.proyecto, () => procesarJob(job)), { connection, concurrency: WORKER_CONCURRENCY });
 
 worker.on('completed', (job) => {
@@ -1298,17 +1325,21 @@ worker.on('completed', (job) => {
     const { agente, proyecto } = job.data || {};
     const archivo = job.returnvalue?.archivoGenerado;
     const enlaces = job.returnvalue?.enlacesEntregables || [];
-    let mensaje = `✅ ${agente || '?'} · ${proyecto || '?'}\nTarea ${job.id} lista.`;
+    let mensaje = `✅ ${etiquetaAgente(agente)}\nProyecto: ${proyecto || '?'} · tarea ${job.id}`;
     if (enlaces.length) {
         // Máximo 3 para no mandar un mensaje gigante si el agente escribió muchos archivos.
         mensaje += `\n${enlaces.slice(0, 3).join('\n')}`;
     } else if (archivo) {
-        mensaje += `\nArchivo: vault/1-desk/${archivo}`;
+        // Sin entregable enlazable: el resumen interno de la corrida vive en
+        // vault/1-desk, que a propósito no se expone en FileBrowser (es la
+        // bitácora del agente, no un informe para leer). Se dice explícitamente
+        // en vez de dejar una ruta suelta que parece un link roto.
+        mensaje += `\nSin informe publicado — solo bitácora interna (vault/1-desk/${archivo})`;
     }
     notificar(mensaje);
 });
 worker.on('failed', (job, err) => {
     console.error(`❌ Tarea ${job.id} falló de forma crítica:`, err.message);
     const { agente, proyecto } = job?.data || {};
-    notificar(`❌ ${agente || '?'} · ${proyecto || '?'}\nTarea ${job?.id} falló: ${err.message}`);
+    notificar(`❌ ${etiquetaAgente(agente)}\nProyecto: ${proyecto || '?'} · tarea ${job?.id}\nFalló: ${err.message}`);
 });
