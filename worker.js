@@ -404,6 +404,106 @@ async function ejecutarSendEmail(paraReal, asunto, cuerpoHtml, adjuntarImagen) {
     }
 }
 
+// Herramienta opcional: gateada por el MISMO `web_access: true` que fetch_url — no es una
+// capacidad nueva de internet, es otra forma de mirar una página pública ya autorizada.
+//
+// Por qué una herramienta propia y no fetch_url: la API de PageSpeed devuelve un JSON de
+// cientos de KB (el informe Lighthouse completo). fetch_url lo truncaría a 12k caracteres,
+// dejando fuera justo los puntajes — y aunque cupiera, gastar todo el contexto del agente en
+// JSON crudo para sacar 6 números es tirar tokens. Esta herramienta llama a la API y devuelve
+// solo las métricas que importan, ya legibles.
+//
+// ⚠️ REQUIERE PAGESPEED_API_KEY. Verificado el 29 julio 2026 desde este VPS: sin key la API
+// responde 429 con `quota_limit_value: "0"` — el acceso anónimo ya no existe, no es que esté
+// "limitado". La key es gratis y sin tarjeta (Google Cloud Console → habilitar
+// "PageSpeed Insights API" → crear credencial de API key), con 25,000 consultas/día.
+const PAGESPEED_TOOL = {
+    name: 'pagespeed_check',
+    description: 'Mide el rendimiento real de una página web pública con Google PageSpeed Insights (Lighthouse) y devuelve sus puntajes (rendimiento, accesibilidad, buenas prácticas, SEO) y métricas de carga (LCP, CLS, TBT, FCP), además de las oportunidades de mejora más pesadas. Úsala para diagnosticar el sitio de un negocio con datos reales medidos, nunca estimes ni supongas estos números.',
+    input_schema: {
+        type: 'object',
+        properties: {
+            url: { type: 'string', description: 'URL completa del sitio a medir, ej. https://ejemplo.com' },
+            estrategia: {
+                type: 'string',
+                description: "'mobile' (por defecto, es como llega la mayoría del tráfico turístico) o 'desktop'.",
+            },
+        },
+        required: ['url'],
+    },
+};
+
+async function ejecutarPagespeedCheck(url, estrategia = 'mobile') {
+    const apiKey = process.env.PAGESPEED_API_KEY;
+    if (!apiKey) {
+        return 'RECHAZADO: PAGESPEED_API_KEY no está configurada en el entorno. Sin ella la API de Google responde 429 (el acceso anónimo tiene cuota 0). Pide a un humano que habilite "PageSpeed Insights API" en Google Cloud Console, cree una API key (gratis, sin tarjeta, 25000/día) y la agregue al .env del VPS. No intentes medir el sitio a mano con fetch_url — no da estos números.';
+    }
+    let parsed;
+    try {
+        parsed = new URL(url);
+    } catch {
+        return `RECHAZADO: '${url}' no es una URL válida.`;
+    }
+    if (!/^https?:$/.test(parsed.protocol)) {
+        return `RECHAZADO: solo se permiten URLs http/https, no '${parsed.protocol}'.`;
+    }
+    const modo = estrategia === 'desktop' ? 'desktop' : 'mobile';
+    const endpoint = new URL('https://www.googleapis.com/pagespeedonline/v5/runPagespeed');
+    endpoint.searchParams.set('url', url);
+    endpoint.searchParams.set('strategy', modo);
+    endpoint.searchParams.set('key', apiKey);
+    for (const c of ['performance', 'accessibility', 'best-practices', 'seo']) {
+        endpoint.searchParams.append('category', c);
+    }
+    try {
+        // Lighthouse tarda de verdad: una medición real suele rondar 10-30s, y un sitio lento
+        // (justo los que buscamos) puede pasar de 45s. Timeout generoso a propósito.
+        const respuesta = await fetch(endpoint, { signal: AbortSignal.timeout(120000) });
+        const data = await respuesta.json();
+        if (!respuesta.ok) {
+            const detalle = data?.error?.message || `${respuesta.status} ${respuesta.statusText}`;
+            return `ERROR midiendo ${url}: ${detalle}`;
+        }
+        const lh = data.lighthouseResult;
+        if (!lh) return `ERROR: PageSpeed no devolvió un informe para ${url}.`;
+
+        const pct = (cat) => {
+            const s = lh.categories?.[cat]?.score;
+            return typeof s === 'number' ? Math.round(s * 100) : null;
+        };
+        const metrica = (id) => lh.audits?.[id]?.displayValue || 'n/d';
+        const fmt = (v) => (v === null ? 'n/d' : `${v}/100`);
+
+        // Oportunidades: auditorías que Lighthouse marca con ahorro real de tiempo. Se ordenan
+        // por cuánto pesan y se dan las 5 mayores — son el argumento concreto de venta.
+        const oportunidades = Object.values(lh.audits || {})
+            .filter((a) => a?.details?.type === 'opportunity' && (a.details.overallSavingsMs || 0) > 0)
+            .sort((a, b) => (b.details.overallSavingsMs || 0) - (a.details.overallSavingsMs || 0))
+            .slice(0, 5)
+            .map((a) => `  - ${a.title}: ahorro estimado ${Math.round(a.details.overallSavingsMs)} ms`);
+
+        return [
+            `PageSpeed (${modo}) para ${url}`,
+            `Medido: ${lh.fetchTime || 'n/d'}`,
+            '',
+            `Rendimiento: ${fmt(pct('performance'))}`,
+            `Accesibilidad: ${fmt(pct('accessibility'))}`,
+            `Buenas prácticas: ${fmt(pct('best-practices'))}`,
+            `SEO: ${fmt(pct('seo'))}`,
+            '',
+            `LCP (carga del contenido principal): ${metrica('largest-contentful-paint')}`,
+            `FCP (primer contenido visible): ${metrica('first-contentful-paint')}`,
+            `TBT (bloqueo de interacción): ${metrica('total-blocking-time')}`,
+            `CLS (estabilidad visual): ${metrica('cumulative-layout-shift')}`,
+            `Velocidad percibida: ${metrica('speed-index')}`,
+            '',
+            oportunidades.length ? `Oportunidades de mejora más pesadas:\n${oportunidades.join('\n')}` : 'Sin oportunidades de mejora destacadas.',
+        ].join('\n');
+    } catch (err) {
+        return `ERROR midiendo ${url}: ${err.message}`;
+    }
+}
+
 // Herramienta opcional: gateada por `search_access: true` en el playbook. A diferencia de
 // fetch_url (que solo lee una URL que ya conoces), esta permite DESCUBRIR URLs nuevas — es
 // el reemplazo real de "buscar en Google". Google/Bing/DuckDuckGo bloquean scraping directo
@@ -805,6 +905,10 @@ async function ejecutarTool(nombre, input, writePaths, dbAccess, codeRepoAccess,
             if (!webAccess) return 'RECHAZADO: este agente no tiene autoridad para acceder a internet (falta web_access: true en su playbook).';
             return await ejecutarFetchUrl(input.url);
         }
+        case 'pagespeed_check': {
+            if (!webAccess) return 'RECHAZADO: este agente no tiene autoridad para acceder a internet (falta web_access: true en su playbook).';
+            return await ejecutarPagespeedCheck(input.url, input.estrategia);
+        }
         case 'extract_site_branding': {
             if (!webAccess) return 'RECHAZADO: este agente no tiene autoridad para acceder a internet (falta web_access: true en su playbook).';
             return await ejecutarExtractBranding(input.url, input.guardar_logo_en, writePaths);
@@ -884,7 +988,7 @@ async function procesarJob(job) {
     const emailAccess = /email_access:\s*true/i.test(playbookContenido);
     let herramientas = dbAccess ? [...TOOLS, SQL_TOOL, AIRTABLE_TOOL] : [...TOOLS];
     if (codeRepoAccess) herramientas = [...herramientas, ...CODE_REPO_TOOLS];
-    if (webAccess) herramientas = [...herramientas, WEB_FETCH_TOOL, BRAND_EXTRACT_TOOL];
+    if (webAccess) herramientas = [...herramientas, WEB_FETCH_TOOL, BRAND_EXTRACT_TOOL, PAGESPEED_TOOL];
     if (searchAccess) herramientas = [...herramientas, SEARCH_TOOL];
     if (imageAccess) herramientas = [...herramientas, IMAGE_GEN_TOOL];
     if (emailAccess) herramientas = [...herramientas, EMAIL_TOOL];
@@ -921,7 +1025,7 @@ async function procesarJob(job) {
         : '';
 
     const instruccionWeb = webAccess
-        ? '\n\nTambién tienes acceso a fetch_url para descargar el contenido real (texto plano) de cualquier URL pública. Úsala para leer páginas web reales en vez de suponer qué dicen — especialmente cuando tu tarea te pida revisar el sitio en producción de un proyecto. Cada URL a visitar cuenta como una llamada por separado.\n\nTambién tienes acceso a extract_site_branding para sacar el logo/favicon real y los colores hexadecimales que usa un sitio (a diferencia de fetch_url, que solo da texto plano sin colores ni imágenes). Úsala sobre el sitio de un prospecto antes de escribirle una propuesta o generarle una maqueta — así usas su identidad visual real en vez de inventar una. Si le pasas guardar_logo_en, descarga el logo/favicon encontrado como archivo dentro de tus carpetas autorizadas.'
+        ? '\n\nTambién tienes acceso a fetch_url para descargar el contenido real (texto plano) de cualquier URL pública. Úsala para leer páginas web reales en vez de suponer qué dicen — especialmente cuando tu tarea te pida revisar el sitio en producción de un proyecto. Cada URL a visitar cuenta como una llamada por separado.\n\nTambién tienes acceso a extract_site_branding para sacar el logo/favicon real y los colores hexadecimales que usa un sitio (a diferencia de fetch_url, que solo da texto plano sin colores ni imágenes). Úsala sobre el sitio de un prospecto antes de escribirle una propuesta o generarle una maqueta — así usas su identidad visual real en vez de inventar una. Si le pasas guardar_logo_en, descarga el logo/favicon encontrado como archivo dentro de tus carpetas autorizadas.\n\nTambién tienes acceso a pagespeed_check para medir el rendimiento real de un sitio con Google PageSpeed Insights (Lighthouse) y obtener sus puntajes y tiempos de carga reales. Cada medición tarda entre 10 y 60 segundos, así que mide un sitio a la vez y no re-midas el mismo sitio dos veces en la misma tarea. Nunca estimes ni inventes estos números: si la herramienta falla para un sitio, di que falló y por qué, en vez de escribir un puntaje supuesto.'
         : '';
 
     const instruccionSearch = searchAccess
