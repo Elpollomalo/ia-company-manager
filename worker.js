@@ -818,6 +818,7 @@ const FILEBROWSER_MAPEOS = [
     ['vault/7-investigacion-mercado', 'investigacion-mercado'],
     ['vault/7-prospeccion-negocios', 'prospeccion-negocios'],
     ['vault/8-imagenes-generadas', 'imagenes-generadas'],
+    ['vault/9-auditoria-web', 'auditoria-web'],
     ['vault/sources/creativa-balam/prospectos', 'marketing/prospectos-creativa-balam'],
 ].sort((a, b) => b[0].length - a[0].length); // más específico primero (ej. .../reportes antes que el padre)
 
