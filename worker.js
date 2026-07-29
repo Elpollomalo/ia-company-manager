@@ -817,6 +817,7 @@ const FILEBROWSER_MAPEOS = [
     ['vault/5-bot-logs/balam-website', 'bots/balam-website/preguntas-log'],
     ['vault/7-investigacion-mercado', 'investigacion-mercado'],
     ['vault/7-prospeccion-negocios', 'prospeccion-negocios'],
+    ['vault/6-web-notes', 'revision-sitios'],
     ['vault/8-imagenes-generadas', 'imagenes-generadas'],
     ['vault/9-auditoria-web', 'auditoria-web'],
     ['vault/sources/creativa-balam/prospectos', 'marketing/prospectos-creativa-balam'],
