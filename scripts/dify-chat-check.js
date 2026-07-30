@@ -39,6 +39,15 @@ const PREGUNTAS_AUDITORIA = {
     ],
 };
 
+// TourBrain necesita el input "destino" para que el nodo HTTP del Chatflow
+// traiga el catalogo de una ciudad -- sin esto responde honestamente "falta
+// indicar la ciudad" y una corrida de auditoria completa se ve como "todo
+// roto" sin serlo (paso real el 30 julio 2026, casi lleva a diagnosticar mal
+// un bug de otro tipo). Los demas bots no usan destino, así que no lo necesitan.
+const INPUTS_POR_PROYECTO = {
+    'tourbrain': { destino: 'cozumel' },
+};
+
 const VAULT_LOGS_DIR = path.join(__dirname, '..', 'vault', '5-bot-logs');
 
 function slugEntorno(proyecto) {
@@ -50,7 +59,7 @@ function variableProyecto(proyecto, sufijo, valorPorDefecto) {
     return process.env[`${sufijo}_${slug}`] || process.env[sufijo] || valorPorDefecto;
 }
 
-async function preguntar(baseUrl, apiKey, pregunta) {
+async function preguntar(baseUrl, apiKey, pregunta, inputs) {
     const respuesta = await fetch(`${baseUrl}/chat-messages`, {
         method: 'POST',
         headers: {
@@ -58,7 +67,7 @@ async function preguntar(baseUrl, apiKey, pregunta) {
             'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-            inputs: {},
+            inputs: inputs || {},
             query: pregunta,
             response_mode: 'blocking',
             user: 'auditoria-ia-company-manager',
@@ -94,6 +103,8 @@ async function main() {
         process.exit(1);
     }
 
+    const inputs = INPUTS_POR_PROYECTO[proyecto];
+
     console.log(`🔎 Probando el bot de '${proyecto}' con ${preguntas.length} pregunta(s)...\n`);
 
     const ahora = new Date();
@@ -103,7 +114,7 @@ async function main() {
         console.log(`❓ ${pregunta}`);
         lineasLog.push(`**❓ ${pregunta}**`, '');
         try {
-            const respuesta = await preguntar(baseUrl, apiKey, pregunta);
+            const respuesta = await preguntar(baseUrl, apiKey, pregunta, inputs);
             console.log(`🐿️ ${respuesta}\n`);
             lineasLog.push(respuesta, '');
         } catch (err) {
