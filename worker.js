@@ -419,7 +419,7 @@ async function ejecutarSendEmail(paraReal, asunto, cuerpoHtml, adjuntarImagen) {
 // "PageSpeed Insights API" → crear credencial de API key), con 25,000 consultas/día.
 const PAGESPEED_TOOL = {
     name: 'pagespeed_check',
-    description: 'Mide el rendimiento real de una página web pública con Google PageSpeed Insights (Lighthouse) y devuelve sus puntajes (rendimiento, accesibilidad, buenas prácticas, SEO) y métricas de carga (LCP, CLS, TBT, FCP), además de las oportunidades de mejora más pesadas. Úsala para diagnosticar el sitio de un negocio con datos reales medidos, nunca estimes ni supongas estos números.',
+    description: 'Mide el rendimiento real de una página web pública con Google PageSpeed Insights (Lighthouse) y devuelve sus puntajes (rendimiento, accesibilidad, buenas prácticas, SEO) y métricas de carga (LCP, CLS, TBT, FCP), además de las oportunidades de mejora más pesadas. Úsala para diagnosticar el sitio de un negocio con datos reales medidos, nunca estimes ni supongas estos números. Si le pasas guardar_crudo_en, además del resumen guarda el reporte COMPLETO de Lighthouse (las ~150 auditorías, no solo el resumen) y la captura de pantalla real del sitio medido, como archivos dentro de tus carpetas autorizadas.',
     input_schema: {
         type: 'object',
         properties: {
@@ -428,12 +428,16 @@ const PAGESPEED_TOOL = {
                 type: 'string',
                 description: "'mobile' (por defecto, es como llega la mayoría del tráfico turístico) o 'desktop'.",
             },
+            guardar_crudo_en: {
+                type: 'string',
+                description: "Ruta base (sin extensión), dentro de tus carpetas autorizadas, donde guardar el crudo completo -- ej. 'vault/9-auditoria-web/bacalar/crudos/casabakal-mobile'. Se le agrega '.json' (reporte completo de Lighthouse) y '.jpg' (captura de pantalla real, si Lighthouse la trae) automáticamente. Si no la pasas, solo obtienes el resumen y no se guarda nada.",
+            },
         },
         required: ['url'],
     },
 };
 
-async function ejecutarPagespeedCheck(url, estrategia = 'mobile') {
+async function ejecutarPagespeedCheck(url, estrategia = 'mobile', guardarCrudoEn = null, writePaths = []) {
     const apiKey = process.env.PAGESPEED_API_KEY;
     if (!apiKey) {
         return 'RECHAZADO: PAGESPEED_API_KEY no está configurada en el entorno. Sin ella la API de Google responde 429 (el acceso anónimo tiene cuota 0). Pide a un humano que habilite "PageSpeed Insights API" en Google Cloud Console, cree una API key (gratis, sin tarjeta, 25000/día) y la agregue al .env del VPS. No intentes medir el sitio a mano con fetch_url — no da estos números.';
@@ -482,6 +486,41 @@ async function ejecutarPagespeedCheck(url, estrategia = 'mobile') {
             .slice(0, 5)
             .map((a) => `  - ${a.title}: ahorro estimado ${Math.round(a.details.overallSavingsMs)} ms`);
 
+        // Crudo: el resumen de arriba descarta ~145 de las ~150 auditorías de Lighthouse y
+        // toda captura de pantalla -- si el agente pide guardarlo (guardar_crudo_en), se
+        // persiste el reporte COMPLETO que Google regresó (data, no solo lh) más la captura
+        // real del sitio (Lighthouse la trae en base64 dentro de audits['final-screenshot']).
+        // Reportado por Carlos el 30 julio 2026: la auditoría de PageSpeed nunca dejaba
+        // "los crudos" como sí hace prospección (crudo.md -> informes/); aquí no era que el
+        // agente olvidara guardarlos, es que la herramienta nunca se los daba.
+        const lineasCrudo = [];
+        if (guardarCrudoEn) {
+            if (!rutaEstaAutorizada(guardarCrudoEn, writePaths)) {
+                lineasCrudo.push(`No se guardó el crudo: no tienes autoridad de escritura sobre '${guardarCrudoEn}'.`);
+            } else {
+                try {
+                    const rutaJsonAbs = resolverRutaSegura(`${guardarCrudoEn}.json`);
+                    fs.mkdirSync(path.dirname(rutaJsonAbs), { recursive: true });
+                    fs.writeFileSync(rutaJsonAbs, JSON.stringify(data, null, 2), 'utf-8');
+                    lineasCrudo.push(`Crudo completo (Lighthouse, ~150 auditorías) guardado en '${guardarCrudoEn}.json'.`);
+
+                    const screenshotUri = lh.audits?.['final-screenshot']?.details?.data;
+                    if (screenshotUri && screenshotUri.startsWith('data:image/')) {
+                        const b64 = screenshotUri.split(',')[1];
+                        if (b64) {
+                            const rutaJpgAbs = resolverRutaSegura(`${guardarCrudoEn}.jpg`);
+                            fs.writeFileSync(rutaJpgAbs, Buffer.from(b64, 'base64'));
+                            lineasCrudo.push(`Captura real del sitio guardada en '${guardarCrudoEn}.jpg'.`);
+                        }
+                    } else {
+                        lineasCrudo.push('Lighthouse no trajo captura de pantalla esta vez (pasa a veces, no es error).');
+                    }
+                } catch (err) {
+                    lineasCrudo.push(`No se pudo guardar el crudo: ${err.message}`);
+                }
+            }
+        }
+
         return [
             `PageSpeed (${modo}) para ${url}`,
             `Medido: ${lh.fetchTime || 'n/d'}`,
@@ -498,6 +537,7 @@ async function ejecutarPagespeedCheck(url, estrategia = 'mobile') {
             `Velocidad percibida: ${metrica('speed-index')}`,
             '',
             oportunidades.length ? `Oportunidades de mejora más pesadas:\n${oportunidades.join('\n')}` : 'Sin oportunidades de mejora destacadas.',
+            ...(lineasCrudo.length ? ['', ...lineasCrudo] : []),
         ].join('\n');
     } catch (err) {
         return `ERROR midiendo ${url}: ${err.message}`;
@@ -909,7 +949,7 @@ async function ejecutarTool(nombre, input, writePaths, dbAccess, codeRepoAccess,
         }
         case 'pagespeed_check': {
             if (!webAccess) return 'RECHAZADO: este agente no tiene autoridad para acceder a internet (falta web_access: true en su playbook).';
-            return await ejecutarPagespeedCheck(input.url, input.estrategia);
+            return await ejecutarPagespeedCheck(input.url, input.estrategia, input.guardar_crudo_en, writePaths);
         }
         case 'extract_site_branding': {
             if (!webAccess) return 'RECHAZADO: este agente no tiene autoridad para acceder a internet (falta web_access: true en su playbook).';
@@ -1027,7 +1067,7 @@ async function procesarJob(job) {
         : '';
 
     const instruccionWeb = webAccess
-        ? '\n\nTambién tienes acceso a fetch_url para descargar el contenido real (texto plano) de cualquier URL pública. Úsala para leer páginas web reales en vez de suponer qué dicen — especialmente cuando tu tarea te pida revisar el sitio en producción de un proyecto. Cada URL a visitar cuenta como una llamada por separado.\n\nTambién tienes acceso a extract_site_branding para sacar el logo/favicon real y los colores hexadecimales que usa un sitio (a diferencia de fetch_url, que solo da texto plano sin colores ni imágenes). Úsala sobre el sitio de un prospecto antes de escribirle una propuesta o generarle una maqueta — así usas su identidad visual real en vez de inventar una. Si le pasas guardar_logo_en, descarga el logo/favicon encontrado como archivo dentro de tus carpetas autorizadas.\n\nTambién tienes acceso a pagespeed_check para medir el rendimiento real de un sitio con Google PageSpeed Insights (Lighthouse) y obtener sus puntajes y tiempos de carga reales. Cada medición tarda entre 10 y 60 segundos, así que mide un sitio a la vez y no re-midas el mismo sitio dos veces en la misma tarea. Nunca estimes ni inventes estos números: si la herramienta falla para un sitio, di que falló y por qué, en vez de escribir un puntaje supuesto.'
+        ? '\n\nTambién tienes acceso a fetch_url para descargar el contenido real (texto plano) de cualquier URL pública. Úsala para leer páginas web reales en vez de suponer qué dicen — especialmente cuando tu tarea te pida revisar el sitio en producción de un proyecto. Cada URL a visitar cuenta como una llamada por separado.\n\nTambién tienes acceso a extract_site_branding para sacar el logo/favicon real y los colores hexadecimales que usa un sitio (a diferencia de fetch_url, que solo da texto plano sin colores ni imágenes). Úsala sobre el sitio de un prospecto antes de escribirle una propuesta o generarle una maqueta — así usas su identidad visual real en vez de inventar una. Si le pasas guardar_logo_en, descarga el logo/favicon encontrado como archivo dentro de tus carpetas autorizadas.\n\nTambién tienes acceso a pagespeed_check para medir el rendimiento real de un sitio con Google PageSpeed Insights (Lighthouse) y obtener sus puntajes y tiempos de carga reales. Cada medición tarda entre 10 y 60 segundos, así que mide un sitio a la vez y no re-midas el mismo sitio dos veces en la misma tarea. Nunca estimes ni inventes estos números: si la herramienta falla para un sitio, di que falló y por qué, en vez de escribir un puntaje supuesto. Si le pasas guardar_crudo_en, además del resumen guarda el reporte COMPLETO de Lighthouse y la captura real del sitio como archivos aparte dentro de tus carpetas autorizadas — tu playbook te dirá si debes usarlo siempre o no.'
         : '';
 
     const instruccionSearch = searchAccess

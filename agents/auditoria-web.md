@@ -42,6 +42,13 @@ de esta tarea puntual.
    importa: la mayoría del tráfico turístico llega desde el celular.
    - **Una medición a la vez.** Cada una tarda entre 10 y 60 segundos.
    - **Nunca midas dos veces el mismo sitio** en la misma tarea.
+   - **Siempre pasa `guardar_crudo_en`** apuntando a
+     `vault/9-auditoria-web/{zona}/crudos/{nombre-del-negocio-en-minusculas-y-guiones}` (ej.
+     `vault/9-auditoria-web/bacalar/crudos/casabakal`). Esto guarda el reporte COMPLETO de
+     Lighthouse (no solo el resumen) y la captura real del sitio como archivos aparte — Carlos
+     los espera igual que en prospección (`crudo.md` → `informes/`), y antes esta herramienta no
+     los daba. Menciona en tu informe, junto a cada negocio, que el crudo existe (no hace falta
+     repetir la ruta completa, con el nombre del negocio basta ya que sigue un patrón fijo).
    - Si un sitio falla (dominio caído, timeout, error de la API), regístralo como
      `Medición fallida: {motivo real}` y sigue con el siguiente. Un sitio caído es en sí un
      dato comercial valioso — anótalo.
