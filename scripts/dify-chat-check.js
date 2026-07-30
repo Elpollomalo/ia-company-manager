@@ -50,6 +50,24 @@ const INPUTS_POR_PROYECTO = {
 
 const VAULT_LOGS_DIR = path.join(__dirname, '..', 'vault', '5-bot-logs');
 
+// Un agente (ej. investigadores, con web_access) puede investigar qué
+// preguntaría un cliente real y el protocolo del negocio, y dejar su
+// propuesta aquí -- una pregunta por línea, sin numeración ni viñetas. Si
+// existe y trae al menos una línea real, se usa en vez de la lista fija de
+// abajo. Pedido por Carlos el 30 julio 2026: "que se manden las mismas
+// preguntas es una cosa que no sirve, no sirve para hacer un verdadero
+// análisis" -- la lista fija queda solo como respaldo si nunca se ha
+// investigado nada para ese proyecto.
+function leerPreguntasPropuestas(proyecto) {
+    const ruta = path.join(VAULT_LOGS_DIR, proyecto.toLowerCase(), 'preguntas-propuestas.md');
+    if (!fs.existsSync(ruta)) return null;
+    const lineas = fs.readFileSync(ruta, 'utf-8')
+        .split('\n')
+        .map((l) => l.replace(/^[-*]\s*/, '').trim())
+        .filter((l) => l && !l.startsWith('#'));
+    return lineas.length > 0 ? lineas : null;
+}
+
 function slugEntorno(proyecto) {
     return proyecto.toUpperCase().replace(/[^A-Z0-9]+/g, '_');
 }
@@ -97,10 +115,14 @@ async function main() {
         process.exit(1);
     }
 
-    const preguntas = preguntaUnica ? [preguntaUnica] : (PREGUNTAS_AUDITORIA[proyecto] || []);
+    const propuestas = leerPreguntasPropuestas(proyecto);
+    const preguntas = preguntaUnica ? [preguntaUnica] : (propuestas || PREGUNTAS_AUDITORIA[proyecto] || []);
     if (preguntas.length === 0) {
         console.error(`No hay preguntas de auditoría predefinidas para '${proyecto}' y no diste una pregunta puntual.`);
         process.exit(1);
+    }
+    if (propuestas && !preguntaUnica) {
+        console.log(`(usando ${propuestas.length} preguntas propuestas por un agente en preguntas-propuestas.md, no la lista fija)`);
     }
 
     const inputs = INPUTS_POR_PROYECTO[proyecto];
