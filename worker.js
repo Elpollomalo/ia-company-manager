@@ -1041,6 +1041,22 @@ async function procesarJob(job) {
         throw new Error(`El agente '${agente}' está configurado con provider: deepseek pero falta DEEPSEEK_API_KEY en .env`);
     }
 
+    // Modelo elegible por agente desde el panel root (frontmatter `modelo:`).
+    // Si no lo declara, cae al de siempre de su proveedor -- por eso ningun
+    // agente existente cambia de comportamiento al agregar esto (31 jul 2026).
+    const MODELOS_VALIDOS = {
+        deepseek: ['deepseek-v4-flash', 'deepseek-v4-pro'],
+        anthropic: ['claude-sonnet-5'],
+    };
+    const modeloDeclarado = playbookContenido.match(/^modelo:\s*(\S+)$/m)?.[1]?.trim();
+    const modelosDelProveedor = MODELOS_VALIDOS[provider] || [];
+    const modelo = modelosDelProveedor.includes(modeloDeclarado)
+        ? modeloDeclarado
+        : modelosDelProveedor[0] || 'claude-sonnet-5';
+    if (modeloDeclarado && modeloDeclarado !== modelo) {
+        console.log(`⚠️  El agente '${agente}' declara modelo '${modeloDeclarado}', que no es valido para provider '${provider}'. Usando '${modelo}'.`);
+    }
+
     // No volcamos el contenido de vault/sources/ aquí: el agente ya tiene list_files/read_file
     // para pedir exactamente lo que necesita. Servir la carpeta completa de antemano
     // (a veces varios archivos grandes) desperdicia contexto en cada turno sin necesidad.
@@ -1056,7 +1072,7 @@ async function procesarJob(job) {
         ? '\n\nEste rol requiere voz propia: varía tu redacción y estructura, evita sonar robótico o repetitivo. No sacrifiques la fidelidad a las fuentes por creatividad.'
         : '';
 
-    console.log(`🧠 Invocando a ${provider} usando el rol de ${agente} (modo ${modoCreativo ? 'creativo' : 'preciso'}, escritura: ${writePaths.join(', ') || 'ninguna'}, db_access: ${dbAccess}, code_repo_access: ${codeRepoAccess}, web_access: ${webAccess}, search_access: ${searchAccess}, image_access: ${imageAccess}, email_access: ${emailAccess}) para el proyecto ${proyecto}...`);
+    console.log(`🧠 Invocando a ${provider}/${modelo} usando el rol de ${agente} (modo ${modoCreativo ? 'creativo' : 'preciso'}, escritura: ${writePaths.join(', ') || 'ninguna'}, db_access: ${dbAccess}, code_repo_access: ${codeRepoAccess}, web_access: ${webAccess}, search_access: ${searchAccess}, image_access: ${imageAccess}, email_access: ${emailAccess}) para el proyecto ${proyecto}...`);
 
     const instruccionSQL = dbAccess
         ? '\n\nTambién tienes acceso a run_sql para ejecutar SQL real contra la base de datos de staging. Sentencias destructivas (DROP/DELETE/ALTER/TRUNCATE) son rechazadas automáticamente por el sistema; si necesitas una, repórtala en tu respuesta final para que un humano la revise, no intentes forzarla.\n\nTambién tienes acceso a run_airtable para llamar a la API REST de Airtable (schema y registros) contra la base configurada en AIRTABLE_BASE_ID. El método DELETE es rechazado automáticamente por el sistema; si necesitas uno, repórtalo en tu respuesta final para que un humano lo revise, no intentes forzarlo.'
@@ -1133,7 +1149,7 @@ async function procesarJob(job) {
                     'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`,
                 },
                 body: JSON.stringify({
-                    model: 'deepseek-v4-flash',
+                    model: modelo,
                     max_tokens: 32000,
                     stream: true,
                     messages: messagesDS,
@@ -1235,7 +1251,7 @@ async function procesarJob(job) {
             // de generar una respuesta larga (nos pasó con 16000 sin streaming:
             // el modelo se quedaba sin tokens a medio entregable).
             const streamRespuesta = anthropic.messages.stream({
-                model: 'claude-sonnet-5',
+                model: modelo,
                 max_tokens: 64000,
                 system: systemPrompt,
                 tools: herramientas,

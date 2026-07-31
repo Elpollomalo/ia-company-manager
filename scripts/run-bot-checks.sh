@@ -1,29 +1,15 @@
 #!/bin/bash
-# Corre la bateria de preguntas de auditoria contra cada bot en produccion.
-# Cada proyecto se corre por separado y un fallo (ej. TourBrain sin su API key
-# todavia) no debe tumbar la corrida del otro.
-#
-# balam-website se quito de esta lista el 30 julio 2026 -- se migro a tareas
-# nativas del panel root (ponexo-root: generar preguntas con contexto real +
-# enviarlas + resumen semanal, cada una editable). Sigue corriendo aqui solo
-# para gnga-web3 y tourbrain mientras no se migran tambien.
-cd /root/agente-constructor || exit 1
-
-FECHA=$(date +%F)
-BASE_URL="https://archivos.creativabalam.com.mx/files/bots"
-FALLOS=""
-ENLACES=""
-for proyecto in gnga-web3 tourbrain; do
-    if node scripts/dify-chat-check.js "$proyecto"; then
-        ENLACES="${ENLACES}\\n${BASE_URL}/${proyecto}/preguntas-log/${FECHA}.md"
-    else
-        echo "aviso: fallo el chequeo de $proyecto (ver arriba)"
-        FALLOS="$FALLOS $proyecto"
-    fi
-done
-
-if [ -n "$FALLOS" ]; then
-    node -e "require('./scripts/telegram-notify').notificar('⚠️ dify-bot-check: fallo el chequeo de:$FALLOS')"
-else
-    node -e "require('./scripts/telegram-notify').notificar('✅ dify-bot-check: gnga-web3 y tourbrain respondieron bien.$ENLACES')"
-fi
+# MIGRADO AL PANEL ROOT (ponexo-root) el 31 julio 2026, con autorizacion
+# explicita de Carlos. Los tres bots (balam-website, gnga-web3, tourbrain)
+# ahora corren como tareas editables del panel, cada una con su propio
+# renglon y boton de correr:
+#   - "Preguntas fijas"          -> las mismas de PREGUNTAS_AUDITORIA de
+#                                   scripts/dify-chat-check.js, ahora
+#                                   editables desde el panel
+#   - "Generar preguntas variables" -> un agente investiga y propone
+#   - "Preguntas variables"      -> las manda al bot
+# dify-bot-check.timer quedo apagado (systemctl disable --now). Este script
+# se deja en el repo por si hiciera falta volver atras; scripts/dify-chat-check.js
+# sigue intacto y se puede correr a mano: node scripts/dify-chat-check.js <proyecto>
+echo "run-bot-checks.sh: migrado al panel root (ponexo-root). Nada que hacer aqui."
+exit 0
