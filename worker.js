@@ -1,3 +1,23 @@
+// Cada linea del log lleva su fecha/hora. Sin esto, worker.log era una lista
+// plana sin tiempo: el agente de mantenimiento no podia distinguir un error
+// de hace semanas de uno de hoy y reportaba el historico completo como si
+// fuera actual (encontrado el 31 julio 2026 con su primer reporte real).
+for (const nivel of ['log', 'error', 'warn']) {
+    const original = console[nivel].bind(console);
+    console[nivel] = (...args) => {
+        // Ojo: varios mensajes empiezan con "\n" para separar bloques. Si el
+        // sello de tiempo va antes, queda solo en una linea y el mensaje real
+        // arranca sin fecha -- justo lo que rompe la ventana de 7 dias del
+        // agente de mantenimiento. Se saca el salto al frente.
+        const sello = `[${new Date().toISOString()}]`;
+        if (typeof args[0] === 'string') {
+            const saltos = args[0].match(/^\n+/)?.[0] || '';
+            if (saltos) return original(`${saltos}${sello}`, args[0].slice(saltos.length), ...args.slice(1));
+        }
+        return original(sello, ...args);
+    };
+}
+
 const { Worker } = require('bullmq');
 const { connection } = require('./config');
 const Anthropic = require('@anthropic-ai/sdk');
@@ -1003,7 +1023,18 @@ async function procesarJob(job) {
     const sourcesDir = path.join(__dirname, 'vault', 'sources', proyecto.toLowerCase());
 
     if (!fs.existsSync(playbookPath)) {
-        throw new Error(`El playbook para el agente '${agente}' no existe.`);
+        // Mensaje util en vez de un callejon sin salida: casi siempre es un
+        // nombre mal escrito o incompleto (paso real: se encolo
+        // 'programadores' cuando existen 'programadores-borrador' y
+        // 'programadores-revision'; fallo 3 veces sin decir cual era el bueno).
+        const existentes = fs.readdirSync(path.join(__dirname, 'agents'))
+            .filter((f) => f.endsWith('.md'))
+            .map((f) => f.replace(/\.md$/, ''));
+        const parecidos = existentes.filter((n) => n.startsWith(agente) || agente.startsWith(n));
+        const pista = parecidos.length
+            ? ` ¿Quisiste decir ${parecidos.map((n) => `'${n}'`).join(' o ')}?`
+            : ` Agentes disponibles: ${existentes.join(', ')}.`;
+        throw new Error(`El playbook para el agente '${agente}' no existe.${pista}`);
     }
 
     const houseRules = fs.readFileSync(houseRulesPath, 'utf-8');
