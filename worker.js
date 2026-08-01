@@ -353,7 +353,7 @@ const EMAIL_TOOL = {
             para: { type: 'string', description: 'Destinatario real deseado (el prospecto/persona a la que este correo está dirigido) — puede que no sea a quien realmente llegue, ver descripción de la herramienta.' },
             asunto: { type: 'string', description: 'Asunto del correo.' },
             cuerpo_html: { type: 'string', description: 'Cuerpo del correo en HTML simple (párrafos, negritas, links) — no uses CSS complejo ni JavaScript.' },
-            adjuntar_imagen: { type: 'string', description: 'Ruta de una imagen YA generada (ej. vault/8-imagenes-generadas/creativa-balam/prospectos/{slug}/mockup.png) para adjuntarla al correo. Si la das, PON en tu cuerpo_html una etiqueta <img src="cid:imagen-embebida" style="max-width:100%"> en el lugar donde quieras que se vea la imagen dentro del cuerpo del correo (no solo como archivo aparte) — el cid es siempre literalmente "imagen-embebida", no inventes otro. Omitir el parámetro si no hay imagen que adjuntar.' },
+            adjuntar_imagen: { description: 'Imagen(es) a incrustar en el correo. Dos formas: (1) UNA sola imagen, como texto con la ruta -- entonces su cid es literalmente "imagen-embebida"; (2) VARIAS, como objeto {"cid-que-tu-elijas": "ruta/a/imagen.png", "otro-cid": "ruta/a/otra.png"} -- entonces cada una usa el cid que le pusiste. En ambos casos las rutas van DENTRO del proyecto (ej. vault/8-imagenes-generadas/...), nunca fuera. Y no basta con adjuntarlas: PON en tu cuerpo_html un <img src="cid:EL-CID" style="max-width:100%"> por cada una, donde quieras que se vea; si no, llegan como archivos sueltos.' },
         },
         required: ['para', 'asunto', 'cuerpo_html'],
     },
@@ -384,23 +384,38 @@ async function ejecutarSendEmail(paraReal, asunto, cuerpoHtml, adjuntarImagen) {
     // que el propio agente ya tenía permiso de crear.
     let avisoAdjunto = '';
     const cuerpoPeticion = { from: remitente, to: destinatarioFinal, subject: asuntoFinal, html: cuerpoFinal };
-    if (adjuntarImagen) {
-        try {
-            const rutaAbs = path.resolve(PROJECT_ROOT, adjuntarImagen);
-            if (rutaAbs !== PROJECT_ROOT && !rutaAbs.startsWith(PROJECT_ROOT + path.sep)) {
-                avisoAdjunto = `\nNo se adjuntó '${adjuntarImagen}': ruta fuera del proyecto.`;
-            } else if (!fs.existsSync(rutaAbs)) {
-                avisoAdjunto = `\nNo se adjuntó: '${adjuntarImagen}' no existe.`;
-            } else {
-                const contenidoB64 = fs.readFileSync(rutaAbs).toString('base64');
-                // content_id fijo y predecible ('imagen-embebida') para que el agente pueda
-                // referenciarla dentro del HTML como <img src="cid:imagen-embebida"> y se vea
-                // la imagen dentro del cuerpo del correo, no solo como archivo aparte.
-                cuerpoPeticion.attachments = [{ filename: path.basename(adjuntarImagen), content: contenidoB64, content_id: 'imagen-embebida' }];
+
+    // Acepta una imagen (string, como siempre) o VARIAS: un objeto
+    // { "cid-que-yo-elijo": "ruta/a/la/imagen.png", ... }. Hizo falta el 1 ago
+    // 2026 porque el correo de prospeccion lleva DOS imagenes distintas: la
+    // captura del sitio medido dentro del analisis, y el mockup de trabajos en
+    // el pie. Con un solo adjunto no se podia. La forma de string sigue
+    // funcionando igual (cid 'imagen-embebida'), asi que nada existente se rompe.
+    const imagenes = typeof adjuntarImagen === 'string'
+        ? { 'imagen-embebida': adjuntarImagen }
+        : (adjuntarImagen && typeof adjuntarImagen === 'object' ? adjuntarImagen : null);
+
+    if (imagenes) {
+        const adjuntos = [];
+        for (const [cid, ruta] of Object.entries(imagenes)) {
+            try {
+                const rutaAbs = path.resolve(PROJECT_ROOT, ruta);
+                if (rutaAbs !== PROJECT_ROOT && !rutaAbs.startsWith(PROJECT_ROOT + path.sep)) {
+                    avisoAdjunto += `\nNo se adjuntó '${ruta}' (cid ${cid}): ruta fuera del proyecto.`;
+                } else if (!fs.existsSync(rutaAbs)) {
+                    avisoAdjunto += `\nNo se adjuntó '${ruta}' (cid ${cid}): no existe.`;
+                } else {
+                    adjuntos.push({
+                        filename: path.basename(ruta),
+                        content: fs.readFileSync(rutaAbs).toString('base64'),
+                        content_id: cid,
+                    });
+                }
+            } catch (err) {
+                avisoAdjunto += `\nNo se adjuntó '${ruta}' (cid ${cid}): ${err.message}`;
             }
-        } catch (err) {
-            avisoAdjunto = `\nNo se adjuntó '${adjuntarImagen}': ${err.message}`;
         }
+        if (adjuntos.length > 0) cuerpoPeticion.attachments = adjuntos;
     }
 
     try {
