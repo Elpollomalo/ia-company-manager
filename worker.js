@@ -606,10 +606,13 @@ function verificarYRegistrarUso(archivoContador, limiteMensual) {
     return { permitido: true, usadas: usadasEsteMes + 1 };
 }
 
-// search_web (Serper) — 300 búsquedas/mes, muy por debajo de las 2500 gratis de la cuenta.
-// El diseño de los agentes ya usa Sección Amarilla como método principal (gratis), así que
-// search_web es solo respaldo — en uso normal ni se acerca a este límite.
-const SEARCH_MONTHLY_LIMIT = 300;
+// search_web (Serper) — 600 búsquedas/mes (subido de 300 el 1 ago 2026 por
+// Carlos, al arrancar la prospección profunda por páginas 2-4, que consume
+// mucho más que el uso normal). Sigue siendo un freno de gasto real: el saldo
+// gratis de la cuenta es de una sola vez (2500 al registrarse, ~2387 al subir
+// este límite), no mensual; agotado eso son ~1 USD por cada 1000 búsquedas.
+// A 600/mes el saldo gratis da para ~4 meses antes de pagar.
+const SEARCH_MONTHLY_LIMIT = 600;
 const SEARCH_USAGE_FILE = path.join(VAULT_DIR, '.search-usage.json');
 const verificarYRegistrarBusqueda = () => verificarYRegistrarUso(SEARCH_USAGE_FILE, SEARCH_MONTHLY_LIMIT);
 
