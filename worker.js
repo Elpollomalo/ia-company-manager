@@ -571,11 +571,12 @@ async function ejecutarPagespeedCheck(url, estrategia = 'mobile', guardarCrudoEn
 // usa Serper.dev (API de resultados de Google real, ~$1 por 1000 búsquedas, 2500 gratis).
 const SEARCH_TOOL = {
     name: 'search_web',
-    description: 'Busca en Google (vía API de Serper) y devuelve título, link y snippet de los primeros resultados. Úsala para DESCUBRIR sitios/negocios que no conoces todavía — para leer el contenido completo de un resultado, después usa fetch_url sobre su link.',
+    description: 'Busca en Google (vía API de Serper) y devuelve título, link y snippet de los resultados. Úsala para DESCUBRIR sitios/negocios que no conoces todavía — para leer el contenido completo de un resultado, después usa fetch_url sobre su link. Con `pagina` puedes pedir resultados MÁS PROFUNDOS que la primera página (pagina: 2 son los resultados 11-20, pagina: 3 los 21-30, etc.) — útil cuando los de la primera página ya están bien posicionados y buscas negocios con menos presencia.',
     input_schema: {
         type: 'object',
         properties: {
             query: { type: 'string', description: 'Términos de búsqueda, ej. "restaurantes en Mérida Yucatán"' },
+            pagina: { type: 'integer', description: 'Página de resultados de Google (1 = primeros 10, 2 = 11-20, 3 = 21-30...). Por defecto 1.' },
         },
         required: ['query'],
     },
@@ -618,7 +619,10 @@ const IMAGE_MONTHLY_LIMIT = 1000;
 const IMAGE_USAGE_FILE = path.join(VAULT_DIR, '.image-usage.json');
 const verificarYRegistrarImagen = () => verificarYRegistrarUso(IMAGE_USAGE_FILE, IMAGE_MONTHLY_LIMIT);
 
-async function ejecutarSearchWeb(query) {
+// `pagina` (1 ago 2026): sin esto solo se podia leer la primera pagina de
+// Google. Carlos pidio prospectar en las paginas 2, 3 y 4 justamente porque
+// los negocios de la primera ya tienen buen SEO y no necesitan el servicio.
+async function ejecutarSearchWeb(query, pagina = 1) {
     const apiKey = process.env.SERPER_API_KEY;
     if (!apiKey) {
         return 'RECHAZADO: SERPER_API_KEY no está configurada en el entorno — pide a un humano que cree una cuenta en serper.dev y la agregue al .env del VPS.';
@@ -631,20 +635,25 @@ async function ejecutarSearchWeb(query) {
         const respuesta = await fetch('https://google.serper.dev/search', {
             method: 'POST',
             headers: { 'X-API-KEY': apiKey, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ q: query, gl: 'mx', hl: 'es' }),
+            body: JSON.stringify({ q: query, gl: 'mx', hl: 'es', page: Math.max(1, Number(pagina) || 1) }),
             signal: AbortSignal.timeout(15000),
         });
         if (!respuesta.ok) {
             return `ERROR (${respuesta.status}) buscando "${query}" en Serper.`;
         }
         const data = await respuesta.json();
+        const paginaReal = Math.max(1, Number(pagina) || 1);
+        // La numeracion arranca donde arranca esa pagina de Google (pagina 3
+        // -> resultado 21), para que el agente sepa que tan abajo esta cada
+        // negocio y pueda priorizar los mas profundos.
+        const desde = (paginaReal - 1) * 10;
         const resultados = (data.organic || []).slice(0, 10).map((r, i) =>
-            `${i + 1}. ${r.title}\n   ${r.link}\n   ${r.snippet || ''}`
+            `${desde + i + 1}. ${r.title}\n   ${r.link}\n   ${r.snippet || ''}`
         );
         if (resultados.length === 0) {
-            return `Sin resultados para "${query}".`;
+            return `Sin resultados para "${query}" en la pagina ${paginaReal}.`;
         }
-        return `Resultados para "${query}":\n\n${resultados.join('\n\n')}`;
+        return `Resultados para "${query}" (pagina ${paginaReal} de Google):\n\n${resultados.join('\n\n')}`;
     } catch (err) {
         return `ERROR buscando "${query}": ${err.message}`;
     }
@@ -977,7 +986,7 @@ async function ejecutarTool(nombre, input, writePaths, dbAccess, codeRepoAccess,
         }
         case 'search_web': {
             if (!searchAccess) return 'RECHAZADO: este agente no tiene autoridad para buscar en internet (falta search_access: true en su playbook).';
-            return await ejecutarSearchWeb(input.query);
+            return await ejecutarSearchWeb(input.query, input.pagina);
         }
         case 'generate_image': {
             if (!imageAccess) return 'RECHAZADO: este agente no tiene autoridad para generar imágenes (falta image_access: true en su playbook).';
