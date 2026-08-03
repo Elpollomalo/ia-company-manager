@@ -340,7 +340,20 @@ async function ejecutarExtractBranding(url, guardarLogoEn, writePaths) {
 // con el destinatario y asunto reales visibles dentro del correo, para que pueda revisarlo
 // antes de que le llegue de verdad a un prospecto. Mismo patrón de seguridad que ya se usa
 // para bloquear Stripe en modo producción (ALLOW_STRIPE_LIVE_CHARGES).
-const EMAIL_MONTHLY_LIMIT = 50;
+// Subido de 50 a 300 el 3 agosto 2026: con 50 al mes no alcanzaba ni para un
+// lote de prospección (el primero se comió 15 de golpe). 300 sigue muy por
+// debajo del plan gratuito de Resend (3,000/mes, tope 100/día), así que el
+// límite real sigue siendo esta línea y no el proveedor -- que es como debe
+// ser: un error en bucle no puede vaciar la cuota de un día para otro.
+//
+// 🔴 300 NO es la solución definitiva. Resend prohíbe el correo frío en sus
+// términos ("You have obtained all necessary consents and permissions from
+// recipients"), y esa MISMA cuenta manda las confirmaciones de reserva de
+// Tourquesa, los avisos de TourBrain y los correos de verificación. Una
+// suspensión por marketing tumbaría el correo transaccional de clientes que
+// ya pagaron. 300 es un puente mientras se monta el VPS + dominio dedicado
+// solo para campañas (ver vault/1-desk/plan-correo-volumen-y-separacion.md).
+const EMAIL_MONTHLY_LIMIT = 300;
 const EMAIL_USAGE_FILE = path.join(VAULT_DIR, '.email-usage.json');
 const verificarYRegistrarCorreo = () => verificarYRegistrarUso(EMAIL_USAGE_FILE, EMAIL_MONTHLY_LIMIT);
 
@@ -383,7 +396,27 @@ async function ejecutarSendEmail(paraReal, asunto, cuerpoHtml, adjuntarImagen) {
     // corrida — no pasa por rutaEstaAutorizada porque no es una escritura, es adjuntar algo
     // que el propio agente ya tenía permiso de crear.
     let avisoAdjunto = '';
-    const cuerpoPeticion = { from: remitente, to: destinatarioFinal, subject: asuntoFinal, html: cuerpoFinal };
+    /**
+     * Cabeceras de baja (3 agosto 2026). Gmail y Outlook las leen para pintar
+     * SU propio botón de "cancelar suscripción" arriba del mensaje.
+     *
+     * Importa más de lo que parece: quien quiere dejar de recibir tiene ahí un
+     * botón evidente, en vez del de "marcar como spam". Y son las QUEJAS de
+     * spam -- no el volumen -- las que disparan la revisión de una cuenta.
+     * Como esta misma cuenta manda las confirmaciones de reserva de Tourquesa
+     * y los avisos de TourBrain, cada queja evitada protege correo que le
+     * importa a clientes que ya pagaron.
+     *
+     * Se usa `mailto:` y no una URL: no hace falta montar ni mantener ninguna
+     * página de baja, y el aviso llega directo al buzón que ya se revisa.
+     */
+    const correoBaja = process.env.EMAIL_BAJA || remitente;
+    const cabeceras = {
+        'List-Unsubscribe': `<mailto:${correoBaja}?subject=BAJA>`,
+        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+    };
+
+    const cuerpoPeticion = { from: remitente, to: destinatarioFinal, subject: asuntoFinal, html: cuerpoFinal, headers: cabeceras };
 
     // Acepta una imagen (string, como siempre) o VARIAS: un objeto
     // { "cid-que-yo-elijo": "ruta/a/la/imagen.png", ... }. Hizo falta el 1 ago
