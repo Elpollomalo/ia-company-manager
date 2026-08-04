@@ -981,7 +981,13 @@ function rutaEstaAutorizada(rutaRelativa, writePaths) {
  * cambio SÍ sabe a qué proyecto pertenece cada tarea (viene en el job), así
  * que puede acomodar la ruta solo. Un lugar, todos los agentes, para siempre.
  *
- * No toca rutas que ya vengan con proyecto (`1-desk/tourbrain/...`) ni ninguna
+ * Encarpeta por proyecto Y POR AGENTE (`1-desk/tourbrain/marketing/`). Sin lo
+ * segundo, la seccion de Marketing del panel mostraba tambien reportes del bot y
+ * trabajo de programadores: dentro de 1-desk/tourbrain conviven 10 agentes
+ * distintos. Lo detecto Carlos viendo el panel: *"es importante entender que ahi
+ * en esa misma carpeta, hay trabajos de bots y otros de marketing"*.
+ *
+ * No toca ninguna
  * otra carpeta del vault: las que ya se organizan por proyecto o por zona
  * (6-web-notes, 8-imagenes-generadas, 7-prospeccion-negocios...) siguen igual.
  */
@@ -990,18 +996,25 @@ const PROYECTOS_CONOCIDOS = new Set([
     'gnga-web3', 'diagnostico-balam', 'ponexo', 'bluereef', 'blue-reef-divers', 'cozutours',
 ]);
 
-function encarpetarPorProyecto(rutaRelativa, proyecto) {
+function encarpetarPorProyecto(rutaRelativa, proyecto, agente) {
     if (!proyecto) return rutaRelativa;
     const limpia = String(rutaRelativa).replace(/^\.\//, '').replace(/^\/+/, '');
     const partes = limpia.split('/').filter(Boolean);
     if (partes[0] !== 'vault') return rutaRelativa;
     if (partes[1] !== '1-desk') return rutaRelativa;
-    // Ya viene encarpetada por un proyecto: no se toca.
-    if (partes.length > 2 && PROYECTOS_CONOCIDOS.has(partes[2])) return rutaRelativa;
-    return ['vault', '1-desk', proyecto, ...partes.slice(2)].join('/');
+
+    // Ya viene encarpetada por proyecto Y agente: no se toca.
+    if (partes.length > 3 && PROYECTOS_CONOCIDOS.has(partes[2]) && partes[3] === agente) {
+        return rutaRelativa;
+    }
+    // Viene con proyecto pero sin agente: se le mete su agente.
+    if (partes.length > 2 && PROYECTOS_CONOCIDOS.has(partes[2])) {
+        return ['vault', '1-desk', partes[2], agente, ...partes.slice(3)].filter(Boolean).join('/');
+    }
+    return ['vault', '1-desk', proyecto, agente, ...partes.slice(2)].filter(Boolean).join('/');
 }
 
-async function ejecutarTool(nombre, input, writePaths, dbAccess, codeRepoAccess, webAccess, searchAccess, imageAccess, imageHqAccess, emailAccess, proyecto) {
+async function ejecutarTool(nombre, input, writePaths, dbAccess, codeRepoAccess, webAccess, searchAccess, imageAccess, imageHqAccess, emailAccess, proyecto, agenteActual) {
     switch (nombre) {
         case 'list_files': {
             const rutaAbs = resolverRutaSegura(input.ruta);
@@ -1019,7 +1032,7 @@ async function ejecutarTool(nombre, input, writePaths, dbAccess, codeRepoAccess,
             // Acomoda por proyecto ANTES de validar: la autorizacion sigue
             // siendo la misma (1-desk/{proyecto} sigue estando dentro de
             // 1-desk), pero el archivo ya no cae en el monton plano.
-            const rutaFinal = encarpetarPorProyecto(input.ruta, proyecto);
+            const rutaFinal = encarpetarPorProyecto(input.ruta, proyecto, agenteActual);
             if (!rutaEstaAutorizada(rutaFinal, writePaths)) {
                 return `RECHAZADO: este agente no tiene autoridad de escritura sobre '${input.ruta}'. Rutas permitidas: ${writePaths.join(', ')}`;
             }
@@ -1365,7 +1378,7 @@ async function procesarJob(job) {
 
                 let resultado;
                 try {
-                    resultado = await ejecutarTool(toolCall.function.name, input, writePaths, dbAccess, codeRepoAccess, webAccess, searchAccess, imageAccess, imageHqAccess, emailAccess, proyecto);
+                    resultado = await ejecutarTool(toolCall.function.name, input, writePaths, dbAccess, codeRepoAccess, webAccess, searchAccess, imageAccess, imageHqAccess, emailAccess, proyecto, agente);
                 } catch (err) {
                     resultado = `ERROR: ${err.message}`;
                 }
@@ -1419,7 +1432,7 @@ async function procesarJob(job) {
 
                 let resultado;
                 try {
-                    resultado = await ejecutarTool(bloque.name, bloque.input, writePaths, dbAccess, codeRepoAccess, webAccess, searchAccess, imageAccess, imageHqAccess, emailAccess, proyecto);
+                    resultado = await ejecutarTool(bloque.name, bloque.input, writePaths, dbAccess, codeRepoAccess, webAccess, searchAccess, imageAccess, imageHqAccess, emailAccess, proyecto, agente);
                 } catch (err) {
                     resultado = `ERROR: ${err.message}`;
                 }
