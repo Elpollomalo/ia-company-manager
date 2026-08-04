@@ -996,25 +996,44 @@ const PROYECTOS_CONOCIDOS = new Set([
     'gnga-web3', 'diagnostico-balam', 'ponexo', 'bluereef', 'blue-reef-divers', 'cozutours',
 ]);
 
-function encarpetarPorProyecto(rutaRelativa, proyecto, agente) {
+/** Nombre de tarea -> nombre de carpeta legible. */
+function slugTarea(nombre) {
+    if (!nombre) return null;
+    const limpio = String(nombre)
+        .toLowerCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 50);
+    return limpio || null;
+}
+
+function encarpetarPorProyecto(rutaRelativa, proyecto, agente, nombreTarea) {
     if (!proyecto) return rutaRelativa;
     const limpia = String(rutaRelativa).replace(/^\.\//, '').replace(/^\/+/, '');
     const partes = limpia.split('/').filter(Boolean);
     if (partes[0] !== 'vault') return rutaRelativa;
     if (partes[1] !== '1-desk') return rutaRelativa;
 
+    // La carpeta de la tarea: los entregables de cada tarea viven juntos y
+    // separados de los de otras (4 agosto 2026, Carlos: *"los entregables
+    // deben tener su carpeta de acuerdo a cada tarea"*). Sin nombre de tarea
+    // no se inventa carpeta -- se queda al nivel del agente.
+    const carpetaTarea = slugTarea(nombreTarea);
+    const cola = carpetaTarea ? [carpetaTarea] : [];
+
     // Ya viene encarpetada por proyecto Y agente: no se toca.
     if (partes.length > 3 && PROYECTOS_CONOCIDOS.has(partes[2]) && partes[3] === agente) {
         return rutaRelativa;
     }
-    // Viene con proyecto pero sin agente: se le mete su agente.
+    // Viene con proyecto pero sin agente: se le mete su agente (y su tarea).
     if (partes.length > 2 && PROYECTOS_CONOCIDOS.has(partes[2])) {
-        return ['vault', '1-desk', partes[2], agente, ...partes.slice(3)].filter(Boolean).join('/');
+        return ['vault', '1-desk', partes[2], agente, ...cola, ...partes.slice(3)].filter(Boolean).join('/');
     }
-    return ['vault', '1-desk', proyecto, agente, ...partes.slice(2)].filter(Boolean).join('/');
+    return ['vault', '1-desk', proyecto, agente, ...cola, ...partes.slice(2)].filter(Boolean).join('/');
 }
 
-async function ejecutarTool(nombre, input, writePaths, dbAccess, codeRepoAccess, webAccess, searchAccess, imageAccess, imageHqAccess, emailAccess, proyecto, agenteActual) {
+async function ejecutarTool(nombre, input, writePaths, dbAccess, codeRepoAccess, webAccess, searchAccess, imageAccess, imageHqAccess, emailAccess, proyecto, agenteActual, nombreTarea) {
     switch (nombre) {
         case 'list_files': {
             const rutaAbs = resolverRutaSegura(input.ruta);
@@ -1032,7 +1051,7 @@ async function ejecutarTool(nombre, input, writePaths, dbAccess, codeRepoAccess,
             // Acomoda por proyecto ANTES de validar: la autorizacion sigue
             // siendo la misma (1-desk/{proyecto} sigue estando dentro de
             // 1-desk), pero el archivo ya no cae en el monton plano.
-            const rutaFinal = encarpetarPorProyecto(input.ruta, proyecto, agenteActual);
+            const rutaFinal = encarpetarPorProyecto(input.ruta, proyecto, agenteActual, nombreTarea);
             if (!rutaEstaAutorizada(rutaFinal, writePaths)) {
                 return `RECHAZADO: este agente no tiene autoridad de escritura sobre '${input.ruta}'. Rutas permitidas: ${writePaths.join(', ')}`;
             }
@@ -1134,7 +1153,7 @@ function ejecutarSerializadoPorProyecto(proyecto, tarea) {
 }
 
 async function procesarJob(job) {
-    const { agente, proyecto, tarea } = job.data;
+    const { agente, proyecto, tarea, nombreTarea } = job.data;
     console.log(`\n⚡ Procesando: Agente [${agente}] | Proyecto [${proyecto}]`);
 
     const playbookPath = path.join(__dirname, 'agents', `${agente}.md`);
@@ -1378,7 +1397,7 @@ async function procesarJob(job) {
 
                 let resultado;
                 try {
-                    resultado = await ejecutarTool(toolCall.function.name, input, writePaths, dbAccess, codeRepoAccess, webAccess, searchAccess, imageAccess, imageHqAccess, emailAccess, proyecto, agente);
+                    resultado = await ejecutarTool(toolCall.function.name, input, writePaths, dbAccess, codeRepoAccess, webAccess, searchAccess, imageAccess, imageHqAccess, emailAccess, proyecto, agente, nombreTarea);
                 } catch (err) {
                     resultado = `ERROR: ${err.message}`;
                 }
@@ -1432,7 +1451,7 @@ async function procesarJob(job) {
 
                 let resultado;
                 try {
-                    resultado = await ejecutarTool(bloque.name, bloque.input, writePaths, dbAccess, codeRepoAccess, webAccess, searchAccess, imageAccess, imageHqAccess, emailAccess, proyecto, agente);
+                    resultado = await ejecutarTool(bloque.name, bloque.input, writePaths, dbAccess, codeRepoAccess, webAccess, searchAccess, imageAccess, imageHqAccess, emailAccess, proyecto, agente, nombreTarea);
                 } catch (err) {
                     resultado = `ERROR: ${err.message}`;
                 }
@@ -1462,8 +1481,19 @@ async function procesarJob(job) {
     // Incluye job.timestamp además de job.id: si Redis pierde el contador de IDs
     // (reinicio sin snapshot reciente, AOF apagado) el ID puede repetirse y
     // sobreescribir en silencio un resumen viejo — el timestamp lo evita.
+    // La bitacora va en SU PROPIA carpeta, separada de los entregables
+    // (4 agosto 2026, pedido de Carlos: *"puedes poner la carpeta de bitacoras
+    // automaticas ahi mismo, no importa que haya mucho, eso no se revuelve con
+    // los entregables y eso es lo que importa"*).
+    //
+    // Antes caia suelta en vault/1-desk/, junto al trabajo real: en la seccion
+    // de Marketing de TourBrain habia 24 bitacoras automaticas mezcladas con 2
+    // entregables de verdad, y era imposible distinguirlos.
+    const carpetaBitacoras = path.join(__dirname, 'vault', '1-desk', proyecto.toLowerCase(), agente, 'bitacoras');
     const nombreArchivoSalida = `${agente}_${proyecto.toLowerCase()}_${job.id}-${job.timestamp}.md`;
-    const rutaSalida = path.join(__dirname, 'vault', '1-desk', nombreArchivoSalida);
+    fs.mkdirSync(carpetaBitacoras, { recursive: true });
+    const rutaSalida = path.join(carpetaBitacoras, nombreArchivoSalida);
+    const rutaRelBitacora = `1-desk/${proyecto.toLowerCase()}/${agente}/bitacoras/${nombreArchivoSalida}`;
 
     const avisoIncompleta = agotoTokens
         ? `\n\n⚠️ **Corrida posiblemente incompleta**: se quedó sin tokens de salida a media respuesta. Puede que haya perdido un write_file en curso.\n`
@@ -1473,7 +1503,7 @@ async function procesarJob(job) {
 
     fs.mkdirSync(path.dirname(rutaSalida), { recursive: true });
     fs.writeFileSync(rutaSalida, contenidoSalida, 'utf-8');
-    console.log(`💾 Resumen de la corrida guardado en: vault/1-desk/${nombreArchivoSalida}`);
+    console.log(`💾 Resumen de la corrida guardado en: vault/${rutaRelBitacora}`);
 
     await commitVault(`${agente} (${provider}) — ${proyecto} — tarea ${job.id}`);
 
@@ -1491,7 +1521,7 @@ async function procesarJob(job) {
 
     return {
         status: 'success',
-        archivoGenerado: nombreArchivoSalida,
+        archivoGenerado: rutaRelBitacora,
         herramientasInvocadas: bitacoraHerramientas.length,
         enlacesEntregables,
     };
