@@ -1524,13 +1524,72 @@ function etiquetaAgente(agente) {
     return DESCRIPCION_AGENTE[agente] || agente || '?';
 }
 
+/**
+ * Bitácora de corridas — una línea JSON por evento.
+ *
+ * ── Por qué existe (4 agosto 2026) ────────────────────────────────────────
+ * El panel de Ponexo sólo guardaba `tareas_programadas`: las que se crean ahí
+ * con su horario. **De las corridas no quedaba ningún rastro.** Ni las tareas
+ * lanzadas desde el chat, ni los crones de las 8, 9 y 10 de la mañana. En el
+ * panel sólo aparecían archivos nuevos, sin saber de qué tarea salieron,
+ * cuándo, ni si alguna había fallado.
+ *
+ * Carlos lo detectó al no encontrar una tarea suya: *"no veo el guion en su
+ * reporte, ni la tarea en el panel"*. Para un panel que debe funcionar sin
+ * Claude, no saber qué está haciendo el sistema es un hueco grande.
+ *
+ * ── Por qué un archivo y no la base del panel ─────────────────────────────
+ * El panel usa SQLite. Se descartó escribir ahí desde el worker por dos
+ * razones: metería una dependencia nativa (better-sqlite3) en el worker sólo
+ * para esto, y dejaría **dos procesos escribiendo la misma base**, que es
+ * justo el tipo de acoplamiento que se rompe de noche sin que nadie lo vea.
+ *
+ * Aquí el worker sólo AGREGA líneas y el panel sólo LEE. Un `append` a un
+ * archivo es atómico para líneas de este tamaño, así que no hace falta
+ * coordinar nada entre los dos procesos.
+ */
+const RUTA_CORRIDAS = path.join(__dirname, 'corridas.jsonl');
+
+function registrarCorrida(evento) {
+    try {
+        fs.appendFileSync(RUTA_CORRIDAS, JSON.stringify({ ...evento, ts: new Date().toISOString() }) + '\n', 'utf-8');
+    } catch (err) {
+        // La bitácora NUNCA puede tumbar una corrida: si no se puede escribir,
+        // se avisa en el log y el trabajo real sigue.
+        console.error('[BITACORA] No se pudo registrar la corrida:', err?.message);
+    }
+}
+
 const worker = new Worker('cola-de-agentes', (job) => ejecutarSerializadoPorProyecto(job.data.proyecto, () => procesarJob(job)), { connection, concurrency: WORKER_CONCURRENCY });
+
+worker.on('active', (job) => {
+    const { agente, proyecto, tarea } = job.data || {};
+    registrarCorrida({
+        evento: 'inicio',
+        jobId: String(job.id),
+        agente: agente || null,
+        proyecto: proyecto || null,
+        // Sólo el arranque de la instrucción: la bitácora es para saber QUÉ
+        // corrió, no para guardar una copia del prompt completo.
+        tarea: typeof tarea === 'string' ? tarea.slice(0, 300) : null,
+    });
+});
 
 worker.on('completed', (job) => {
     console.log(`✅ Tarea ${job.id} procesada con éxito por la IA.`);
     const { agente, proyecto } = job.data || {};
     const archivo = job.returnvalue?.archivoGenerado;
     const enlaces = job.returnvalue?.enlacesEntregables || [];
+
+    registrarCorrida({
+        evento: 'fin',
+        jobId: String(job.id),
+        agente: agente || null,
+        proyecto: proyecto || null,
+        estado: 'ok',
+        archivo: archivo || null,
+        entregables: enlaces.slice(0, 5),
+    });
     let mensaje = `✅ ${etiquetaAgente(agente)}\nProyecto: ${proyecto || '?'} · tarea ${job.id}`;
     if (enlaces.length) {
         // Máximo 3 para no mandar un mensaje gigante si el agente escribió muchos archivos.
@@ -1547,5 +1606,16 @@ worker.on('completed', (job) => {
 worker.on('failed', (job, err) => {
     console.error(`❌ Tarea ${job.id} falló de forma crítica:`, err.message);
     const { agente, proyecto } = job?.data || {};
+
+    // Los fallos importan MÁS que los éxitos en la bitácora: hoy una tarea que
+    // truena de madrugada no deja rastro en ningún lado que Carlos revise.
+    registrarCorrida({
+        evento: 'fin',
+        jobId: String(job?.id ?? '?'),
+        agente: agente || null,
+        proyecto: proyecto || null,
+        estado: 'error',
+        error: String(err?.message || err).slice(0, 500),
+    });
     notificar(`❌ ${etiquetaAgente(agente)}\nProyecto: ${proyecto || '?'} · tarea ${job?.id}\nFalló: ${err.message}`);
 });

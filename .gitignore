@@ -4,3 +4,4 @@ node_modules/
 vault/
 *.bak
 worker.log*
+corridas.jsonl
