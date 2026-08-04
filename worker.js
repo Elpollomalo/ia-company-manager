@@ -1022,9 +1022,18 @@ function encarpetarPorProyecto(rutaRelativa, proyecto, agente, nombreTarea) {
     const carpetaTarea = slugTarea(nombreTarea);
     const cola = carpetaTarea ? [carpetaTarea] : [];
 
-    // Ya viene encarpetada por proyecto Y agente: no se toca.
+    // Ya viene encarpetada por proyecto Y agente.
+    //
+    // OJO: eso NO basta para dejarla pasar. El panel le dice al agente
+    // "guarda en vault/1-desk/{proyecto}/{agente}" (es la rutaVault de su
+    // seccion), asi que la ruta llega ya con esos dos niveles y sin la carpeta
+    // de la tarea. Devolverla intacta aqui era el bug: los entregables de la
+    // tarea "Textos redes sociales" cayeron sueltos en Trabajos en vez de en
+    // su carpeta. Si falta el nivel de la tarea, se agrega.
     if (partes.length > 3 && PROYECTOS_CONOCIDOS.has(partes[2]) && partes[3] === agente) {
-        return rutaRelativa;
+        if (!carpetaTarea) return rutaRelativa;
+        if (partes[4] === carpetaTarea || partes[4] === 'bitacoras') return rutaRelativa;
+        return ['vault', '1-desk', partes[2], agente, carpetaTarea, ...partes.slice(4)].filter(Boolean).join('/');
     }
     // Viene con proyecto pero sin agente: se le mete su agente (y su tarea).
     if (partes.length > 2 && PROYECTOS_CONOCIDOS.has(partes[2])) {
