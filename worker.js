@@ -955,6 +955,52 @@ function enlaceFileBrowser(rutaRelativaVault) {
     return null;
 }
 
+// ── Enlace al panel de Ponexo ─────────────────────────────────────────────
+//
+// Desde el 4 agosto 2026 los entregables de los agentes viven en
+// `vault/1-desk/{proyecto}/{agente}/{tarea}/`, y esa carpeta NO esta expuesta
+// en FileBrowser. Como el aviso de Telegram solo sabia armar links de
+// FileBrowser, se quedaba sin enlaces y caia al plan B... que manda la ruta de
+// la BITACORA. Carlos, al recibirlo: *"me llego la bitacora del ultimo, no el
+// reporte"*. El aviso no estaba roto por poquito: ninguna tarea del panel
+// avisaba bien.
+//
+// El panel es hoy el lugar donde se leen los entregables, asi que ahi apunta.
+const PANEL_BASE_URL = process.env.PANEL_URL || 'https://panel.creativabalam.com.mx';
+
+// Agentes que tienen seccion propia en el panel (ver ponexo-root/lib/categorias.ts).
+// Los que no estan aqui -- programadores, catalogadores, cartografos, editores,
+// disenadores -- escriben en el vault pero no tienen donde mostrarse todavia:
+// para esos vale mas no mandar link que mandar uno que abre un 404.
+const AGENTES_CON_SECCION = new Set([
+    'marketing', 'auditoria-bots', 'prospectores',
+    'auditoria-web', 'investigadores', 'mantenimiento',
+]);
+
+/**
+ * `1-desk/tourbrain/marketing/textos-redes-sociales/textos.md`
+ *   → `https://panel.../proyectos/tourbrain/marketing/documentos/textos-redes-sociales`
+ *
+ * Apunta a la CARPETA de la tarea, no al archivo: casi siempre hay varios
+ * entregables y lo util es entrar a verlos todos juntos.
+ */
+function enlacePanel(rutaRelativaVault) {
+    const partes = String(rutaRelativaVault || '')
+        .replace(/^\.\//, '').replace(/^vault\//, '').replace(/\/+$/, '')
+        .split('/').filter(Boolean);
+
+    // [0]=1-desk [1]=proyecto [2]=agente [3..]=carpeta de tarea + archivo
+    if (partes[0] !== '1-desk' || partes.length < 4) return null;
+    const [, proyecto, agente, ...resto] = partes;
+    if (!AGENTES_CON_SECCION.has(agente)) return null;
+    if (resto[0] === 'bitacoras') return null; // la bitacora no es un entregable
+
+    // Se quita el archivo para quedarnos con la carpeta contenedora.
+    const carpetas = resto.slice(0, -1).map(encodeURIComponent);
+    return [PANEL_BASE_URL, 'proyectos', encodeURIComponent(proyecto),
+        encodeURIComponent(agente), 'documentos', ...carpetas].join('/');
+}
+
 function rutaEstaAutorizada(rutaRelativa, writePaths) {
     const normalizada = rutaRelativa.replace(/^\.\//, '').replace(/\/+$/, '');
     return writePaths.some((base) => normalizada === base || normalizada.startsWith(`${base}/`));
@@ -1516,16 +1562,28 @@ async function procesarJob(job) {
 
     await commitVault(`${agente} (${provider}) — ${proyecto} — tarea ${job.id}`);
 
-    // Entregables reales enlazables en FileBrowser (no el resumen interno de
-    // vault/1-desk) — cualquier write_file/generate_image que haya tenido
-    // éxito y caiga dentro de una carpeta expuesta por FileBrowser. Carlos
-    // pidió esto explícitamente (26 julio 2026): poder entrar desde
-    // FileBrowser al reporte/entregable real que avisa Telegram.
+    // Entregables reales de esta corrida (no el resumen interno de la bitacora):
+    // cualquier write_file/generate_image que haya tenido exito.
+    //
+    // OJO con la ruta que se usa. `input.ruta` es la que PIDIO el agente, y
+    // `encarpetarPorProyecto` casi siempre la corrige — le agrega el proyecto,
+    // el agente o la carpeta de la tarea. Enlazar la ruta pedida daba un link a
+    // una carpeta donde el archivo no esta. La ruta final se lee del resultado,
+    // que es justo lo que se guardo en disco.
+    const escrituras = bitacoraHerramientas
+        .filter((b) => (b.herramienta === 'write_file' || b.herramienta === 'generate_image')
+            && !String(b.resultado).startsWith('RECHAZADO'))
+        .map((b) => {
+            const m = String(b.resultado).match(/'([^']+)'/);
+            return m ? m[1] : b.input?.ruta;
+        })
+        .filter(Boolean);
+
+    // El panel primero: es donde Carlos lee los entregables desde el 4 agosto
+    // 2026. FileBrowser queda de respaldo para lo que sigue viviendo en las
+    // carpetas viejas (auditorias por zona, logs de bots, imagenes).
     const enlacesEntregables = [...new Set(
-        bitacoraHerramientas
-            .filter((b) => (b.herramienta === 'write_file' || b.herramienta === 'generate_image') && !String(b.resultado).startsWith('RECHAZADO'))
-            .map((b) => enlaceFileBrowser(b.input.ruta))
-            .filter(Boolean),
+        escrituras.map((r) => enlacePanel(r) || enlaceFileBrowser(r)).filter(Boolean),
     )];
 
     return {
@@ -1533,6 +1591,9 @@ async function procesarJob(job) {
         archivoGenerado: rutaRelBitacora,
         herramientasInvocadas: bitacoraHerramientas.length,
         enlacesEntregables,
+        // Para el aviso: los nombres de archivo dicen QUE se produjo, cosa que
+        // un link solo no comunica.
+        nombresEntregables: [...new Set(escrituras.map((r) => path.basename(r)))],
     };
 }
 
@@ -1629,16 +1690,32 @@ worker.on('completed', (job) => {
         archivo: archivo || null,
         entregables: enlaces.slice(0, 5),
     });
-    let mensaje = `✅ ${etiquetaAgente(agente)}\nProyecto: ${proyecto || '?'} · tarea ${job.id}`;
+    // El nombre de la tarea es lo primero que se busca al ver el aviso en el
+    // celular: "tarea 293" no dice nada. Viene del panel; las tareas lanzadas
+    // desde el chat no lo traen y ahi si toca caer al número.
+    const nombreTarea = job.data?.nombreTarea;
+    const archivos = job.returnvalue?.nombresEntregables || [];
+
+    let mensaje = `✅ ${etiquetaAgente(agente)} — ${proyecto || '?'}`;
+    mensaje += nombreTarea ? `\nTarea: ${nombreTarea}` : `\nTarea ${job.id}`;
+
+    if (archivos.length) {
+        mensaje += `\n\n📄 ${archivos.slice(0, 5).join('\n   ')}`;
+        if (archivos.length > 5) mensaje += `\n   …y ${archivos.length - 5} más`;
+    }
     if (enlaces.length) {
         // Máximo 3 para no mandar un mensaje gigante si el agente escribió muchos archivos.
-        mensaje += `\n${enlaces.slice(0, 3).join('\n')}`;
-    } else if (archivo) {
-        // Sin entregable enlazable: el resumen interno de la corrida vive en
-        // vault/1-desk, que a propósito no se expone en FileBrowser (es la
-        // bitácora del agente, no un informe para leer). Se dice explícitamente
-        // en vez de dejar una ruta suelta que parece un link roto.
-        mensaje += `\nSin informe publicado — solo bitácora interna (vault/1-desk/${archivo})`;
+        mensaje += `\n\n${enlaces.slice(0, 3).join('\n')}`;
+    } else if (archivos.length) {
+        // Escribió, pero en una carpeta sin sección en el panel ni en
+        // FileBrowser (agentes como programadores o disenadores). Mejor decirlo
+        // que dejar un link roto.
+        mensaje += `\n\nSin sección en el panel todavía — está en vault/${archivo ? path.dirname(archivo).replace(/\/bitacoras$/, '') : '1-desk'}`;
+    } else {
+        // No produjo ningún archivo: la corrida terminó bien pero no dejó nada
+        // que leer. Antes esto se anunciaba mandando la ruta de la BITÁCORA, y
+        // parecía que el entregable era la bitácora.
+        mensaje += `\n\nTerminó sin generar entregables.`;
     }
     notificar(mensaje);
 });
