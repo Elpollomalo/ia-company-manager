@@ -960,7 +960,48 @@ function rutaEstaAutorizada(rutaRelativa, writePaths) {
     return writePaths.some((base) => normalizada === base || normalizada.startsWith(`${base}/`));
 }
 
-async function ejecutarTool(nombre, input, writePaths, dbAccess, codeRepoAccess, webAccess, searchAccess, imageAccess, imageHqAccess, emailAccess) {
+/**
+ * Mete bajo su proyecto cualquier escritura a `vault/1-desk/` que venga suelta.
+ *
+ * ── El problema (4 agosto 2026) ───────────────────────────────────────────
+ * `vault/1-desk` es la bandeja de borradores compartida por TRECE agentes desde
+ * antes de que existiera el panel. Se acumularon **481 archivos en una sola
+ * carpeta plana**, de 8 agentes y 6 proyectos mezclados. Carlos, con razón:
+ * *"tener una carpeta con 485 archivos desordenados no es práctico para mí"*, y
+ * *"necesito que cada que lance una tarea nueva, esta se vea en el panel, en su
+ * proyecto y con sus carpetas"*.
+ *
+ * Encima, ninguna vista la mostraba: ni el panel (ninguna sección apunta ahí)
+ * ni FileBrowser (esa carpeta no existe allá). O sea que el sistema llevaba
+ * meses escribiendo donde nadie podía leer.
+ *
+ * ── Por qué se arregla AQUÍ y no en los playbooks ─────────────────────────
+ * Son 13 playbooks distintos. Corregir cada uno es 13 oportunidades de que se
+ * pase uno, y de que un agente nuevo repita el error mañana. El worker en
+ * cambio SÍ sabe a qué proyecto pertenece cada tarea (viene en el job), así
+ * que puede acomodar la ruta solo. Un lugar, todos los agentes, para siempre.
+ *
+ * No toca rutas que ya vengan con proyecto (`1-desk/tourbrain/...`) ni ninguna
+ * otra carpeta del vault: las que ya se organizan por proyecto o por zona
+ * (6-web-notes, 8-imagenes-generadas, 7-prospeccion-negocios...) siguen igual.
+ */
+const PROYECTOS_CONOCIDOS = new Set([
+    'tourbrain', 'tourquesa', 'creativa-balam', 'balam-website',
+    'gnga-web3', 'diagnostico-balam', 'ponexo', 'bluereef', 'blue-reef-divers', 'cozutours',
+]);
+
+function encarpetarPorProyecto(rutaRelativa, proyecto) {
+    if (!proyecto) return rutaRelativa;
+    const limpia = String(rutaRelativa).replace(/^\.\//, '').replace(/^\/+/, '');
+    const partes = limpia.split('/').filter(Boolean);
+    if (partes[0] !== 'vault') return rutaRelativa;
+    if (partes[1] !== '1-desk') return rutaRelativa;
+    // Ya viene encarpetada por un proyecto: no se toca.
+    if (partes.length > 2 && PROYECTOS_CONOCIDOS.has(partes[2])) return rutaRelativa;
+    return ['vault', '1-desk', proyecto, ...partes.slice(2)].join('/');
+}
+
+async function ejecutarTool(nombre, input, writePaths, dbAccess, codeRepoAccess, webAccess, searchAccess, imageAccess, imageHqAccess, emailAccess, proyecto) {
     switch (nombre) {
         case 'list_files': {
             const rutaAbs = resolverRutaSegura(input.ruta);
@@ -975,13 +1016,17 @@ async function ejecutarTool(nombre, input, writePaths, dbAccess, codeRepoAccess,
             return fs.readFileSync(rutaAbs, 'utf-8');
         }
         case 'write_file': {
-            if (!rutaEstaAutorizada(input.ruta, writePaths)) {
+            // Acomoda por proyecto ANTES de validar: la autorizacion sigue
+            // siendo la misma (1-desk/{proyecto} sigue estando dentro de
+            // 1-desk), pero el archivo ya no cae en el monton plano.
+            const rutaFinal = encarpetarPorProyecto(input.ruta, proyecto);
+            if (!rutaEstaAutorizada(rutaFinal, writePaths)) {
                 return `RECHAZADO: este agente no tiene autoridad de escritura sobre '${input.ruta}'. Rutas permitidas: ${writePaths.join(', ')}`;
             }
-            const rutaAbs = resolverRutaSegura(input.ruta);
+            const rutaAbs = resolverRutaSegura(rutaFinal);
             fs.mkdirSync(path.dirname(rutaAbs), { recursive: true });
             fs.writeFileSync(rutaAbs, input.contenido, 'utf-8');
-            return `Archivo guardado en '${input.ruta}' (${input.contenido.length} caracteres).`;
+            return `Archivo guardado en '${rutaFinal}' (${input.contenido.length} caracteres).`;
         }
         case 'run_sql': {
             if (!dbAccess) {
@@ -1320,7 +1365,7 @@ async function procesarJob(job) {
 
                 let resultado;
                 try {
-                    resultado = await ejecutarTool(toolCall.function.name, input, writePaths, dbAccess, codeRepoAccess, webAccess, searchAccess, imageAccess, imageHqAccess, emailAccess);
+                    resultado = await ejecutarTool(toolCall.function.name, input, writePaths, dbAccess, codeRepoAccess, webAccess, searchAccess, imageAccess, imageHqAccess, emailAccess, proyecto);
                 } catch (err) {
                     resultado = `ERROR: ${err.message}`;
                 }
@@ -1374,7 +1419,7 @@ async function procesarJob(job) {
 
                 let resultado;
                 try {
-                    resultado = await ejecutarTool(bloque.name, bloque.input, writePaths, dbAccess, codeRepoAccess, webAccess, searchAccess, imageAccess, imageHqAccess, emailAccess);
+                    resultado = await ejecutarTool(bloque.name, bloque.input, writePaths, dbAccess, codeRepoAccess, webAccess, searchAccess, imageAccess, imageHqAccess, emailAccess, proyecto);
                 } catch (err) {
                     resultado = `ERROR: ${err.message}`;
                 }
