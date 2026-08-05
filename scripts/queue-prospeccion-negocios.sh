@@ -1,21 +1,16 @@
 #!/bin/bash
-# Encola la prospeccion diaria de negocios en la Peninsula de Yucatan.
-# Cambia de zona cada dia: dia-del-anio modulo numero de zonas de la lista.
-# Dos etapas encoladas con el MISMO 'proyecto' (mismo slug de zona) para que
-# el sistema las serialice - informes-prospeccion nunca corre antes que
-# prospectores termine de escribir el crudo del dia (ver ejecutarSerializadoPorProyecto
-# en worker.js).
-cd /root/agente-constructor || exit 1
-
-ZONAS=(merida cancun playa-del-carmen tulum chetumal campeche valladolid cozumel progreso bacalar)
-NOMBRES=("Mérida" "Cancún" "Playa del Carmen" "Tulum" "Chetumal" "Campeche" "Valladolid" "Cozumel" "Progreso" "Bacalar")
-
-DIA_DEL_ANIO=$(date +%j)
-INDICE=$((10#$DIA_DEL_ANIO % ${#ZONAS[@]}))
-ZONA_SLUG="${ZONAS[$INDICE]}"
-ZONA_NOMBRE="${NOMBRES[$INDICE]}"
-FECHA=$(date +%Y-%m-%d)
-PROYECTO="prospeccion-${ZONA_SLUG}"
-
-node -e "require('./queue').agregarTarea('prospectores', '$PROYECTO', 'Zona de hoy: $ZONA_NOMBRE, Yucatán, México. Busca negocios reales en esa zona (turismo, restaurantes, hoteles, servicios, comercio - variedad razonable), visita sus sitios, y deja el registro crudo en vault/7-prospeccion-negocios/$ZONA_SLUG/$FECHA-crudo.md, tal como indica tu playbook.').then(() => process.exit(0))"
-node -e "require('./queue').agregarTarea('informes-prospeccion', '$PROYECTO', 'Procesa vault/7-prospeccion-negocios/$ZONA_SLUG/$FECHA-crudo.md (recien escrito por prospectores) y deja el informe final en vault/7-prospeccion-negocios/$ZONA_SLUG/informes/$FECHA.md, tal como indica tu playbook.').then(() => process.exit(0))"
+# MIGRADO AL PANEL (4 agosto 2026).
+#
+# Esto corria en queue-prospeccion-negocios.timer, fuera del panel: no aparecia como tarea,
+# no se podia editar ni ver, y su historial no existia en ninguna pantalla.
+# Carlos: "que todo viva en el panel".
+#
+# Ahora es una tarea del panel con zona rotativa (ver ponexo-root:
+# lib/zonas.ts zonaDeHoy, lib/tareasEspeciales.ts, lib/programadas.ts).
+# El timer de systemd sigue instalado pero DESACTIVADO, listo para reactivar
+# con 'systemctl enable --now queue-prospeccion-negocios.timer' si el panel llegara a fallar.
+#
+# No se borra este archivo para que quien lo busque encuentre esta nota en vez
+# de nada -- y para no dejar el .service de systemd apuntando al vacio.
+echo "queue-prospeccion-negocios.sh: migrado al panel (ponexo-root). Nada que hacer aqui."
+exit 0
