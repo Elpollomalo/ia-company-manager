@@ -12,7 +12,9 @@ Sintetizar clusters de notas atómicas relacionadas en los documentos vivos de `
 Lee `house-rules.md` completo. Sus reglas tienen prioridad absoluta sobre cualquier instrucción de esta tarea puntual.
 
 ## Proceso
-1. Identifica clusters de notas atómicas relacionadas en `vault/2-atoms/`, apoyándose en los `[[wikilinks]]` que dejó el Cartógrafo.
+1. Identifica clusters de notas atómicas relacionadas en `vault/2-atoms/`, **acotado al proyecto que te toca** (las que llevan ese `proyecto:` en su frontmatter), apoyándote en los `[[wikilinks]]` que dejó el Cartógrafo.
+
+   Empieza por las notas **nuevas o modificadas** desde la última corrida: el thread ya contiene lo demás, y volver a leerlo todo cada vez es lo que hacía fallar estas corridas (5 agosto 2026 — 464 mil caracteres en el vault, ~116 mil tokens por corrida, sin caber en una llamada). Usa `list_files` para ver los nombres y `read_file` sólo sobre las que necesites; nunca cargues la carpeta completa "por si acaso".
 2. Sintetiza esos clusters en el documento de thread correspondiente en `vault/3-threads/{proyecto}.md` — son documentos vivos que crecen con cada corrida, nunca se reescriben desde cero. **Edítalos con `edit_file`, no con `write_file`:** pasan de 40 mil caracteres y reescribirlos completos hace que la generación se corte a media respuesta y la corrida muera sin dejar nada. Lee el documento con `read_file`, y aplica los cambios fragmento por fragmento. `write_file` sólo cuando el thread todavía no exista.
 3. Redacta el briefing diario en `vault/briefings/` resumiendo: qué entró al vault hoy, qué contradicciones (`[FRICTION]`) siguen pendientes, qué threads crecieron y cómo, y una cosa que merece atención humana hoy.
 4. Usa la temperatura más alta (0.7) para que la síntesis y el briefing tengan voz propia y no suenen robóticos, siempre y cuando el contenido siga siendo fiel a lo que dicen las notas atómicas de origen.

@@ -1404,6 +1404,16 @@ async function procesarJob(job) {
     let resultadoIA = '(el agente no devolvió texto final en este turno)';
     let agotoTokens = false;
 
+    // Consumo real de la corrida, sumando TODOS los turnos.
+    //
+    // Importa que sea la suma y no el ultimo turno: el bucle reenvia la
+    // conversacion entera en cada vuelta, asi que una corrida de 8 turnos sobre
+    // un contexto de 100k tokens factura cerca de un millon, no cien mil. Ese
+    // efecto era invisible y es la razon por la que la cadena de conocimiento
+    // resulto carisima sin que nadie pudiera verlo (5 agosto 2026).
+    let tokensEntrada = 0;
+    let tokensSalida = 0;
+
     if (provider === 'deepseek') {
         // DeepSeek habla formato OpenAI: system va como mensaje normal (no hay parámetro
         // `system` aparte), y el caching de contexto es automático por prefijo estable —
@@ -1434,6 +1444,12 @@ async function procesarJob(job) {
                     model: modelo,
                     max_tokens: 32000,
                     stream: true,
+                    // Sin esto, con stream:true la API no devuelve el consumo y
+                    // el gasto de tokens queda invisible -- que es justo como
+                    // estuvo hasta el 5 agosto 2026: habia topes de costo para
+                    // busquedas, imagenes y correos, pero el gasto MAS grande
+                    // del sistema corria sin medir ni registrar.
+                    stream_options: { include_usage: true },
                     messages: messagesDS,
                     tools: herramientasDS,
                 }),
@@ -1466,6 +1482,15 @@ async function procesarJob(job) {
                     if (payload === '[DONE]') continue;
 
                     const evento = JSON.parse(payload);
+
+                    // El chunk final trae `usage` y viene SIN choices: si no se
+                    // revisa antes, `evento.choices[0]` truena y se pierde el dato.
+                    if (evento.usage) {
+                        tokensEntrada += evento.usage.prompt_tokens || 0;
+                        tokensSalida += evento.usage.completion_tokens || 0;
+                    }
+                    if (!evento.choices || evento.choices.length === 0) continue;
+
                     const delta = evento.choices[0].delta;
                     if (evento.choices[0].finish_reason) finishReason = evento.choices[0].finish_reason;
                     if (delta.content) contenidoAcumulado += delta.content;
@@ -1612,7 +1637,10 @@ async function procesarJob(job) {
         ? `\n\n⚠️ **Corrida posiblemente incompleta**: se quedó sin tokens de salida a media respuesta. Puede que haya perdido un write_file en curso.\n`
         : '';
 
-    const contenidoSalida = `# Corrida de ${agente} — ${proyecto}\n\n## Respuesta final${avisoIncompleta}\n${resultadoIA}\n\n## Herramientas invocadas\n${bitacoraTexto}\n`;
+    const consumo = tokensEntrada || tokensSalida
+        ? `\n\n## Consumo\n- Turnos: ${turnos}\n- Tokens de entrada: ${tokensEntrada.toLocaleString('es-MX')}\n- Tokens de salida: ${tokensSalida.toLocaleString('es-MX')}\n- Total: ${(tokensEntrada + tokensSalida).toLocaleString('es-MX')}\n`
+        : '';
+    const contenidoSalida = `# Corrida de ${agente} — ${proyecto}\n\n## Respuesta final${avisoIncompleta}\n${resultadoIA}\n\n## Herramientas invocadas\n${bitacoraTexto}\n${consumo}`;
 
     fs.mkdirSync(path.dirname(rutaSalida), { recursive: true });
     fs.writeFileSync(rutaSalida, contenidoSalida, 'utf-8');
@@ -1648,6 +1676,9 @@ async function procesarJob(job) {
         status: 'success',
         archivoGenerado: rutaRelBitacora,
         herramientasInvocadas: bitacoraHerramientas.length,
+        tokensEntrada,
+        tokensSalida,
+        turnos,
         enlacesEntregables,
         // Para el aviso: el nombre dice QUE se produjo (cosa que un link solo no
         // comunica) y la liga lleva al documento, no nada mas a su carpeta.
@@ -1752,6 +1783,11 @@ worker.on('completed', (job) => {
         estado: 'ok',
         archivo: archivo || null,
         entregables: enlaces.slice(0, 5),
+        // Queda en el historial, no solo en la bitacora: sin esto no hay forma
+        // de responder "cuanto gasto esta tarea" sin abrir archivo por archivo.
+        tokens: (job.returnvalue?.tokensEntrada || 0) + (job.returnvalue?.tokensSalida || 0),
+        tokensEntrada: job.returnvalue?.tokensEntrada || 0,
+        turnos: job.returnvalue?.turnos || 0,
     });
     // El nombre de la tarea es lo primero que se busca al ver el aviso en el
     // celular: "tarea 293" no dice nada. Viene del panel; las tareas lanzadas

@@ -13,7 +13,9 @@ Lee `house-rules.md` completo. Sus reglas tienen prioridad absoluta sobre cualqu
 
 ## Proceso
 1. Toma la nota atómica nueva señalada.
-2. Busca en todo `vault/2-atoms/` notas relacionadas por tema, entidad o contexto.
+2. Busca notas relacionadas por tema, entidad o contexto **dentro del mismo proyecto** (las que llevan el mismo `proyecto:` en su frontmatter). Usa `list_files` sobre `vault/2-atoms/` para ver los nombres —que ya describen el contenido— y lee con `read_file` **sólo las candidatas reales**, no la carpeta entera.
+
+   **Nunca cargues todo `vault/2-atoms/`.** El 5 agosto 2026 ya eran 338 notas y 464 mil caracteres: leerlas todas no cabe en una llamada, y hacía que las corridas murieran después de haber pagado la lectura completa. Un enlace entre proyectos distintos además casi nunca es útil: son negocios separados.
 3. Agrega como mínimo dos `[[wikilinks]]` hacia notas relacionadas existentes. Si existen menos de dos notas realmente relacionadas, enlaza las que existan y señala explícitamente que no llegó al mínimo — nunca fuerza enlaces artificiales para completar la cuota.
 4. No crea contenido nuevo: solo teje relaciones entre lo que ya existe.
 

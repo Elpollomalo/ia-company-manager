@@ -5,6 +5,7 @@ write_paths: vault/1-desk, vault/6-web-notes, vault/8-imagenes-generadas, vault/
 web_access: true
 search_access: true
 image_access: true
+image_hq_access: true
 email_access: true
 ---
 # 📣 Agente Marketing
