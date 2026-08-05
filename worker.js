@@ -115,6 +115,24 @@ const TOOLS = [
             required: ['ruta', 'contenido'],
         },
     },
+    {
+        name: 'edit_file',
+        description:
+            'Cambia un fragmento de un archivo que ya existe, sin reescribirlo completo. ' +
+            'USA ESTA en vez de write_file cuando el archivo sea largo y solo necesites corregir o agregar partes: ' +
+            'write_file te obliga a reescribir el documento entero, y en documentos largos eso se corta a media generación y la corrida falla. ' +
+            'buscar debe aparecer UNA sola vez en el archivo (si aparece varias, incluye más contexto alrededor hasta que sea único). ' +
+            'Para agregar algo nuevo, busca la línea que quedará justo antes y reemplázala por ella misma más el texto nuevo.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                ruta: { type: 'string', description: 'Ruta relativa del archivo a modificar. Tiene que existir ya.' },
+                buscar: { type: 'string', description: 'El texto exacto a reemplazar, tal como está en el archivo (respetando espacios y saltos de línea). Debe ser único.' },
+                reemplazar: { type: 'string', description: 'El texto que va en su lugar. Vacío para borrar el fragmento.' },
+            },
+            required: ['ruta', 'buscar', 'reemplazar'],
+        },
+    },
 ];
 
 // Herramienta opcional: solo se ofrece a agentes cuyo playbook declare `db_access: true`.
@@ -1116,6 +1134,45 @@ async function ejecutarTool(nombre, input, writePaths, dbAccess, codeRepoAccess,
             fs.writeFileSync(rutaAbs, input.contenido, 'utf-8');
             return `Archivo guardado en '${rutaFinal}' (${input.contenido.length} caracteres).`;
         }
+        case 'edit_file': {
+            // Existe porque write_file obliga a reescribir el documento entero.
+            //
+            // El thread de TourBrain (48 mil caracteres) reventó por eso el
+            // 4 agosto 2026: la generación se corta a la mitad y la corrida
+            // muere con 'terminated'. Paso al segundo intento por suerte, no
+            // por diseño -- y esa misma reconstruccion corre sola cada domingo,
+            // donde un fallo no lo ve nadie hasta el lunes.
+            //
+            // Ademas el playbook de editores siempre dijo que los threads son
+            // "documentos vivos que crecen con cada corrida, nunca se
+            // reescriben desde cero". Sin esta herramienta, esa regla era
+            // imposible de cumplir.
+            const rutaFinal = encarpetarPorProyecto(input.ruta, proyecto, agenteActual, nombreTarea);
+            if (!rutaEstaAutorizada(rutaFinal, writePaths)) {
+                return `RECHAZADO: este agente no tiene autoridad de escritura sobre '${input.ruta}'. Rutas permitidas: ${writePaths.join(', ')}`;
+            }
+            const rutaAbs = resolverRutaSegura(rutaFinal);
+            if (!fs.existsSync(rutaAbs)) {
+                return `El archivo '${rutaFinal}' no existe. edit_file solo modifica archivos ya escritos; usa write_file para crearlo.`;
+            }
+            const original = fs.readFileSync(rutaAbs, 'utf-8');
+
+            // Se cuenta antes de reemplazar: si el fragmento aparece varias
+            // veces, cambiar "la primera" es justo el error silencioso que
+            // deja el documento mal sin que el agente se entere.
+            const partes = original.split(input.buscar);
+            if (partes.length === 1) {
+                return `No se encontró el texto a reemplazar en '${rutaFinal}'. Tiene que coincidir EXACTO, incluyendo espacios y saltos de línea — lee el archivo otra vez con read_file y copia el fragmento tal cual.`;
+            }
+            if (partes.length > 2) {
+                return `El texto a reemplazar aparece ${partes.length - 1} veces en '${rutaFinal}' y no se puede saber cuál querías. Agrega más contexto alrededor (la línea de antes o la de después) hasta que el fragmento sea único.`;
+            }
+
+            const nuevo = partes.join(input.reemplazar);
+            fs.writeFileSync(rutaAbs, nuevo, 'utf-8');
+            const delta = nuevo.length - original.length;
+            return `Editado '${rutaFinal}' (${delta >= 0 ? '+' : ''}${delta} caracteres, ahora ${nuevo.length}).`;
+        }
         case 'run_sql': {
             if (!dbAccess) {
                 return 'RECHAZADO: este agente no tiene autoridad para ejecutar SQL (falta db_access: true en su playbook).';
@@ -1572,7 +1629,7 @@ async function procesarJob(job) {
     // una carpeta donde el archivo no esta. La ruta final se lee del resultado,
     // que es justo lo que se guardo en disco.
     const escrituras = bitacoraHerramientas
-        .filter((b) => (b.herramienta === 'write_file' || b.herramienta === 'generate_image')
+        .filter((b) => (b.herramienta === 'write_file' || b.herramienta === 'generate_image' || b.herramienta === 'edit_file')
             && !String(b.resultado).startsWith('RECHAZADO'))
         .map((b) => {
             const m = String(b.resultado).match(/'([^']+)'/);

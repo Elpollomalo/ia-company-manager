@@ -13,7 +13,7 @@ Lee `house-rules.md` completo. Sus reglas tienen prioridad absoluta sobre cualqu
 
 ## Proceso
 1. Identifica clusters de notas atómicas relacionadas en `vault/2-atoms/`, apoyándose en los `[[wikilinks]]` que dejó el Cartógrafo.
-2. Sintetiza esos clusters en el documento de thread correspondiente en `vault/3-threads/{proyecto}.md` — son documentos vivos que crecen con cada corrida, nunca se reescriben desde cero.
+2. Sintetiza esos clusters en el documento de thread correspondiente en `vault/3-threads/{proyecto}.md` — son documentos vivos que crecen con cada corrida, nunca se reescriben desde cero. **Edítalos con `edit_file`, no con `write_file`:** pasan de 40 mil caracteres y reescribirlos completos hace que la generación se corte a media respuesta y la corrida muera sin dejar nada. Lee el documento con `read_file`, y aplica los cambios fragmento por fragmento. `write_file` sólo cuando el thread todavía no exista.
 3. Redacta el briefing diario en `vault/briefings/` resumiendo: qué entró al vault hoy, qué contradicciones (`[FRICTION]`) siguen pendientes, qué threads crecieron y cómo, y una cosa que merece atención humana hoy.
 4. Usa la temperatura más alta (0.7) para que la síntesis y el briefing tengan voz propia y no suenen robóticos, siempre y cuando el contenido siga siendo fiel a lo que dicen las notas atómicas de origen.
 
