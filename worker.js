@@ -1566,6 +1566,15 @@ async function procesarJob(job) {
             });
             ultimaRespuesta = await streamRespuesta.finalMessage();
 
+            // El consumo tambien se mide aqui, no solo del lado de DeepSeek.
+            // Se agrego el 5 agosto 2026 al decidir el modelo de cobro de
+            // Ponexo: se venden tokens, y Carlos quiere ofrecer agentes de
+            // Claude y de DeepSeek desde el principio. Con la medicion solo en
+            // una rama, una corrida de Claude facturaria CERO -- el trabajo mas
+            // caro seria justo el que no se cobra.
+            tokensEntrada += ultimaRespuesta.usage?.input_tokens || 0;
+            tokensSalida += ultimaRespuesta.usage?.output_tokens || 0;
+
             console.log(`↳ [${agente}] turno ${turnos} — stop_reason: ${ultimaRespuesta.stop_reason}`);
 
             if (ultimaRespuesta.stop_reason === 'max_tokens') {
