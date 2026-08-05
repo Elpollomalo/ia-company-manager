@@ -26,7 +26,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
-const { notificar } = require('./scripts/telegram-notify');
+const { notificar, escaparHtml } = require('./scripts/telegram-notify');
 require('dotenv').config();
 
 const execFileAsync = promisify(execFile);
@@ -978,13 +978,14 @@ const AGENTES_CON_SECCION = new Set([
 ]);
 
 /**
- * `1-desk/tourbrain/marketing/textos-redes-sociales/textos.md`
- *   → `https://panel.../proyectos/tourbrain/marketing/documentos/textos-redes-sociales`
+ * `1-desk/tourbrain/marketing/textos-redes-sociales/textos.md` →
+ *   carpeta: `https://panel.../proyectos/tourbrain/marketing/documentos/textos-redes-sociales`
+ *   archivo: `.../textos-redes-sociales/textos.md`
  *
- * Apunta a la CARPETA de la tarea, no al archivo: casi siempre hay varios
- * entregables y lo util es entrar a verlos todos juntos.
+ * El panel abre las dos cosas con la misma ruta (ver NavegadorArchivos.tsx):
+ * si el ultimo segmento es un archivo, lo muestra; si no, lista la carpeta.
  */
-function enlacePanel(rutaRelativaVault) {
+function enlacePanel(rutaRelativaVault, { alArchivo = false } = {}) {
     const partes = String(rutaRelativaVault || '')
         .replace(/^\.\//, '').replace(/^vault\//, '').replace(/\/+$/, '')
         .split('/').filter(Boolean);
@@ -995,10 +996,10 @@ function enlacePanel(rutaRelativaVault) {
     if (!AGENTES_CON_SECCION.has(agente)) return null;
     if (resto[0] === 'bitacoras') return null; // la bitacora no es un entregable
 
-    // Se quita el archivo para quedarnos con la carpeta contenedora.
-    const carpetas = resto.slice(0, -1).map(encodeURIComponent);
+    // Sin `alArchivo` se quita el archivo y queda la carpeta contenedora.
+    const cola = (alArchivo ? resto : resto.slice(0, -1)).map(encodeURIComponent);
     return [PANEL_BASE_URL, 'proyectos', encodeURIComponent(proyecto),
-        encodeURIComponent(agente), 'documentos', ...carpetas].join('/');
+        encodeURIComponent(agente), 'documentos', ...cola].join('/');
 }
 
 function rutaEstaAutorizada(rutaRelativa, writePaths) {
@@ -1591,9 +1592,14 @@ async function procesarJob(job) {
         archivoGenerado: rutaRelBitacora,
         herramientasInvocadas: bitacoraHerramientas.length,
         enlacesEntregables,
-        // Para el aviso: los nombres de archivo dicen QUE se produjo, cosa que
-        // un link solo no comunica.
-        nombresEntregables: [...new Set(escrituras.map((r) => path.basename(r)))],
+        // Para el aviso: el nombre dice QUE se produjo (cosa que un link solo no
+        // comunica) y la liga lleva al documento, no nada mas a su carpeta.
+        entregablesConLiga: [...new Map(
+            escrituras.map((r) => [path.basename(r), {
+                nombre: path.basename(r),
+                url: enlacePanel(r, { alArchivo: true }) || enlaceFileBrowser(r),
+            }]),
+        ).values()],
     };
 }
 
@@ -1694,30 +1700,39 @@ worker.on('completed', (job) => {
     // celular: "tarea 293" no dice nada. Viene del panel; las tareas lanzadas
     // desde el chat no lo traen y ahi si toca caer al número.
     const nombreTarea = job.data?.nombreTarea;
-    const archivos = job.returnvalue?.nombresEntregables || [];
+    const archivos = job.returnvalue?.entregablesConLiga || [];
 
-    let mensaje = `✅ ${etiquetaAgente(agente)} — ${proyecto || '?'}`;
-    mensaje += nombreTarea ? `\nTarea: ${nombreTarea}` : `\nTarea ${job.id}`;
+    // Mensaje en HTML: en texto plano Telegram convertia 'informe.md' en la liga
+    // http://informe.md (.md es el dominio de Moldavia) y al tocarla daba error
+    // de DNS. Todo lo que venga de fuera va escapado.
+    let mensaje = `✅ ${escaparHtml(etiquetaAgente(agente))} — ${escaparHtml(proyecto || '?')}`;
+    mensaje += nombreTarea ? `\nTarea: ${escaparHtml(nombreTarea)}` : `\nTarea ${job.id}`;
 
     if (archivos.length) {
-        mensaje += `\n\n📄 ${archivos.slice(0, 5).join('\n   ')}`;
-        if (archivos.length > 5) mensaje += `\n   …y ${archivos.length - 5} más`;
+        // Cada archivo es liga directa al documento; si no tiene seccion en el
+        // panel se deja el nombre en <code> para que Telegram no lo enligue solo.
+        const lineas = archivos.slice(0, 5).map((a) => (a.url
+            ? `📄 <a href="${escaparHtml(a.url)}">${escaparHtml(a.nombre)}</a>`
+            : `📄 <code>${escaparHtml(a.nombre)}</code>`));
+        mensaje += `\n\n${lineas.join('\n')}`;
+        if (archivos.length > 5) mensaje += `\n…y ${archivos.length - 5} más`;
     }
     if (enlaces.length) {
-        // Máximo 3 para no mandar un mensaje gigante si el agente escribió muchos archivos.
-        mensaje += `\n\n${enlaces.slice(0, 3).join('\n')}`;
+        // La carpeta completa, por si hay mas de los 5 que se listaron arriba.
+        mensaje += `\n\n<a href="${escaparHtml(enlaces[0])}">Ver la carpeta de la tarea</a>`;
     } else if (archivos.length) {
         // Escribió, pero en una carpeta sin sección en el panel ni en
         // FileBrowser (agentes como programadores o disenadores). Mejor decirlo
         // que dejar un link roto.
-        mensaje += `\n\nSin sección en el panel todavía — está en vault/${archivo ? path.dirname(archivo).replace(/\/bitacoras$/, '') : '1-desk'}`;
+        const carpeta = archivo ? path.dirname(archivo).replace(/\/bitacoras$/, '') : '1-desk';
+        mensaje += `\n\nSin sección en el panel todavía — está en <code>vault/${escaparHtml(carpeta)}</code>`;
     } else {
         // No produjo ningún archivo: la corrida terminó bien pero no dejó nada
         // que leer. Antes esto se anunciaba mandando la ruta de la BITÁCORA, y
         // parecía que el entregable era la bitácora.
         mensaje += `\n\nTerminó sin generar entregables.`;
     }
-    notificar(mensaje);
+    notificar(mensaje, { html: true });
 });
 worker.on('failed', (job, err) => {
     console.error(`❌ Tarea ${job.id} falló de forma crítica:`, err.message);
