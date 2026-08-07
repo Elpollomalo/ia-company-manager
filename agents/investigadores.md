@@ -31,6 +31,30 @@ de esta tarea puntual.
 5. Sé conciso — es un informe de trabajo, no un ensayo. Si una corrida anterior existe en la
    misma carpeta, señala qué cambió respecto a esa en vez de repetir todo desde cero.
 
+## 🔴 Escribe el documento PRIMERO, y amplíalo después
+
+**Tienes un límite de turnos y se te acaba sin avisarte.** Cada llamada a una herramienta gasta
+uno. Si investigas hasta agotarlos, el sistema te corta y **todo tu trabajo se pierde**: no queda
+documento, sólo la bitácora de lo que buscaste.
+
+Pasó el 7 agosto 2026: dos investigaciones hicieron 62 llamadas entre `fetch_url`, `list_files` y
+`read_file`, gastaron 1.1 y 3.1 millones de tokens, y **no entregaron una sola línea**. Se
+cortaron justo antes de escribir.
+
+**Cómo se evita:**
+
+1. **Busca lo mínimo para tener algo que decir** — dos o tres fuentes, no veinte.
+2. **Escribe el documento YA**, con `write_file`, aunque esté incompleto. Marca los huecos con
+   "pendiente de investigar".
+3. **Sigue investigando** y ve **actualizando el mismo archivo** con `edit_file` conforme
+   encuentres más.
+
+Así, te corten cuando te corten, siempre hay entregable. Un documento a medias sirve; una
+investigación perfecta que nunca se escribió no sirve de nada.
+
+**Regla práctica:** si llevas más de 8 búsquedas y todavía no has escrito nada, deja de buscar y
+escribe.
+
 ## Autoridad de escritura
 `vault/1-desk/` y `vault/7-investigacion-mercado/`. No tiene autoridad sobre `vault/2-atoms/`,
 `vault/3-threads/`, `vault/sources/` ni ningún repo de código.

@@ -1404,6 +1404,14 @@ async function procesarJob(job) {
     let resultadoIA = '(el agente no devolvió texto final en este turno)';
     let agotoTokens = false;
 
+    // Se quedó sin TURNOS, que es distinto de quedarse sin tokens de salida.
+    // Un agente que agota los 30 turnos investigando nunca llega a escribir su
+    // entregable: el 7 agosto 2026 dos investigaciones gastaron 1.1 y 3.1
+    // millones de tokens en 62 llamadas a herramientas, se cortaron ahí, y el
+    // sistema las registró como 'ok'. En el panel se veían como corridas
+    // exitosas. Sin esta bandera el fallo es invisible.
+    let agotoTurnos = false;
+
     // Consumo real de la corrida, sumando TODOS los turnos.
     //
     // Importa que sea la suma y no el ultimo turno: el bucle reenvia la
@@ -1544,6 +1552,7 @@ async function procesarJob(job) {
                 messagesDS.push({ role: 'tool', tool_call_id: toolCall.id, content: String(resultado) });
             }
         }
+        if (turnos >= MAX_TURNOS_AGENTE) agotoTurnos = true;
     } else {
         let messages = [
             { role: 'user', content: `Ejecuta la siguiente tarea de forma estricta: ${tarea}` },
@@ -1613,6 +1622,7 @@ async function procesarJob(job) {
 
             messages.push({ role: 'user', content: resultadosHerramientas });
         }
+        if (turnos >= MAX_TURNOS_AGENTE) agotoTurnos = true;
     }
 
     if (turnos >= MAX_TURNOS_AGENTE) {
@@ -1644,6 +1654,8 @@ async function procesarJob(job) {
 
     const avisoIncompleta = agotoTokens
         ? `\n\n⚠️ **Corrida posiblemente incompleta**: se quedó sin tokens de salida a media respuesta. Puede que haya perdido un write_file en curso.\n`
+        : agotoTurnos
+        ? `\n\n⚠️ **Se agotaron los ${MAX_TURNOS_AGENTE} turnos**: el agente se cortó mientras trabajaba. Lo que haya escrito puede estar incompleto.\n`
         : '';
 
     const consumo = tokensEntrada || tokensSalida
@@ -1680,6 +1692,18 @@ async function procesarJob(job) {
     const enlacesEntregables = [...new Set(
         escrituras.map((r) => enlacePanel(r) || enlaceFileBrowser(r)).filter(Boolean),
     )];
+
+    // Agotar los turnos SIN haber escrito nada es un fracaso completo, no un
+    // exito: el agente investigo hasta que lo cortaron y nunca llego a producir
+    // el entregable. Se lanza para que quede como 'error' en el historial y
+    // llegue el aviso -- antes se registraba 'ok' y el fallo era invisible.
+    if (agotoTurnos && escrituras.length === 0) {
+        throw new Error(
+            `Se agotaron los ${MAX_TURNOS_AGENTE} turnos sin escribir ningun archivo. ` +
+            `El agente hizo ${bitacoraHerramientas.length} llamadas a herramientas y se corto antes de entregar. ` +
+            `Revisa la instruccion: probablemente pide investigar mucho sin decir cuando escribir.`
+        );
+    }
 
     return {
         status: 'success',
