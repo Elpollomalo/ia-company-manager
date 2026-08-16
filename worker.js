@@ -104,6 +104,26 @@ const TOOLS = [
         },
     },
     {
+        name: 'buscar_en_notas',
+        description:
+            'Busca un texto dentro de los archivos de una carpeta y devuelve SÓLO las líneas que coinciden, ' +
+            'con su archivo, número de línea y unas líneas de contexto alrededor. ' +
+            'Es la forma barata de responder "¿qué dice el vault sobre X?" sin cargar documentos enteros: ' +
+            'un thread de 90 KB cuesta ~23 mil tokens cada vez que se lee con read_file, y como cada turno ' +
+            'reenvía toda la conversación, esa lectura se paga en todos los turnos siguientes. ' +
+            'Úsala ANTES de read_file: busca el concepto, mira en qué archivos y líneas aparece, ' +
+            'y sólo entonces lee completo el que de verdad haga falta.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                texto: { type: 'string', description: 'Texto o expresión a buscar. No distingue mayúsculas de minúsculas.' },
+                ruta: { type: 'string', description: "Carpeta o archivo donde buscar, ej. 'vault/2-atoms' o 'vault/3-threads/gnga-web3.md'." },
+                contexto: { type: 'number', description: 'Líneas de contexto antes y después de cada coincidencia. Por defecto 2.' },
+            },
+            required: ['texto', 'ruta'],
+        },
+    },
+    {
         name: 'write_file',
         description: 'Crea o sobreescribe un archivo con el contenido dado. Solo funciona dentro de las carpetas autorizadas para este agente; cualquier otra ruta es rechazada.',
         input_schema: {
@@ -111,6 +131,24 @@ const TOOLS = [
             properties: {
                 ruta: { type: 'string', description: 'Ruta relativa a la raíz del proyecto donde escribir' },
                 contenido: { type: 'string', description: 'Contenido completo a escribir en el archivo' },
+            },
+            required: ['ruta', 'contenido'],
+        },
+    },
+    {
+        name: 'append_file',
+        description:
+            'Agrega texto AL FINAL de un archivo sin leerlo ni reescribirlo. ' +
+            'Es la forma más barata de hacer crecer un documento largo: no necesitas read_file antes, ' +
+            'y por eso no gastas contexto releyendo lo que ya está escrito. ' +
+            'Úsala cuando lo que aportas es material NUEVO que va al final (una sección fechada, una entrada más). ' +
+            'Si necesitas corregir algo que ya está escrito en medio del documento, ésa sí es edit_file. ' +
+            'Si el archivo no existe, lo crea.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                ruta: { type: 'string', description: 'Ruta relativa del archivo al que agregar.' },
+                contenido: { type: 'string', description: 'Texto a agregar al final. Se separa del contenido anterior con una línea en blanco.' },
             },
             required: ['ruta', 'contenido'],
         },
@@ -390,6 +428,179 @@ const EMAIL_TOOL = {
     },
 };
 
+
+// ── Implementación de las herramientas de YouTube ─────────────────────────
+
+/** Saca el id de un video venga como id suelto o como URL de cualquier forma. */
+function idDeVideo(entrada) {
+    const s = String(entrada).trim();
+    const m = s.match(/(?:v=|youtu\.be\/|\/shorts\/|\/embed\/)([A-Za-z0-9_-]{11})/);
+    return m ? m[1] : s;
+}
+
+async function yt(ruta, params) {
+    const key = process.env.YOUTUBE_API_KEY;
+    if (!key) return { error: 'RECHAZADO: falta YOUTUBE_API_KEY en el entorno.' };
+    const q = new URLSearchParams({ ...params, key }).toString();
+    const r = await fetch(`https://www.googleapis.com/youtube/v3/${ruta}?${q}`);
+    const j = await r.json();
+    if (j.error) return { error: `La API de YouTube rechazó la consulta: ${j.error.message}` };
+    return j;
+}
+
+async function ejecutarYoutubeBuscar(input) {
+    const j = await yt('search', {
+        part: 'snippet',
+        q: input.consulta,
+        type: input.tipo || 'video',
+        order: input.orden || 'viewCount',
+        maxResults: Math.min(input.max || 10, 25),
+        ...(input.publicado_despues ? { publishedAfter: new Date(input.publicado_despues).toISOString() } : {}),
+        ...(input.idioma_region ? { regionCode: input.idioma_region } : {}),
+    });
+    if (j.error) return j.error;
+    if (!j.items || !j.items.length) return 'Sin resultados para esa búsqueda.';
+    const filas = j.items.map((x) => {
+        const id = x.id.videoId || x.id.channelId;
+        return `- ${x.snippet.title}\n  id: ${id} | canal: ${x.snippet.channelTitle} | publicado: ${x.snippet.publishedAt.slice(0, 10)}`;
+    });
+    return `${j.items.length} resultados de "${input.consulta}":\n${filas.join('\n')}\n\nPasa los id a youtube_canal o youtube_video para obtener las cifras reales.`;
+}
+
+async function ejecutarYoutubeCanal(input) {
+    let id = String(input.id).trim();
+    // Acepta @nombre o URL: hay que resolverlo a id primero.
+    if (!/^UC[A-Za-z0-9_-]{20,}$/.test(id)) {
+        const nombre = (id.match(/@([A-Za-z0-9_.-]+)/) || [])[1] || id;
+        const b = await yt('search', { part: 'snippet', q: nombre, type: 'channel', maxResults: 1 });
+        if (b.error) return b.error;
+        if (!b.items || !b.items.length) return `No se encontró ningún canal para '${input.id}'.`;
+        id = b.items[0].snippet.channelId;
+    }
+    const j = await yt('channels', { part: 'snippet,statistics', id });
+    if (j.error) return j.error;
+    if (!j.items || !j.items.length) return `No se encontró el canal '${id}'.`;
+    const c = j.items[0];
+    const creado = c.snippet.publishedAt;
+    const meses = Math.round((Date.now() - new Date(creado)) / (1000 * 60 * 60 * 24 * 30.44));
+    const subs = Number(c.statistics.subscriberCount || 0);
+    const vistas = Number(c.statistics.viewCount || 0);
+    const videos = Number(c.statistics.videoCount || 0);
+    return [
+        `Canal: ${c.snippet.title}`,
+        `  id: ${id}`,
+        `  creado: ${creado.slice(0, 10)}  ->  ANTIGÜEDAD: ${meses} meses`,
+        `  suscriptores: ${subs.toLocaleString('es-MX')}`,
+        `  vistas totales: ${vistas.toLocaleString('es-MX')}`,
+        `  videos publicados: ${videos.toLocaleString('es-MX')}`,
+        videos ? `  promedio de vistas por video: ${Math.round(vistas / videos).toLocaleString('es-MX')}` : '',
+        `  país declarado: ${c.snippet.country || 'no declarado'}`,
+    ].filter(Boolean).join('\n');
+}
+
+async function ejecutarYoutubeVideo(input) {
+    const id = idDeVideo(input.id);
+    const j = await yt('videos', { part: 'snippet,statistics,contentDetails', id });
+    if (j.error) return j.error;
+    if (!j.items || !j.items.length) return `No se encontró el video '${id}'.`;
+    const v = j.items[0];
+    const d = (v.contentDetails.duration || '').replace('PT', '').toLowerCase();
+    const vistas = Number(v.statistics.viewCount || 0);
+    const th = v.snippet.thumbnails;
+    return [
+        `Video: ${v.snippet.title}`,
+        `  canal: ${v.snippet.channelTitle} (id ${v.snippet.channelId})`,
+        `  publicado: ${v.snippet.publishedAt.slice(0, 10)}`,
+        `  duración: ${d}`,
+        `  vistas: ${vistas.toLocaleString('es-MX')}`,
+        `  likes: ${Number(v.statistics.likeCount || 0).toLocaleString('es-MX')} | comentarios: ${Number(v.statistics.commentCount || 0).toLocaleString('es-MX')}`,
+        ``,
+        `  MINIATURA: ${(th.maxres || th.high || th.default).url}`,
+        `  FOTOGRAMAS del propio video (a 1/4, 1/2 y 3/4):`,
+        `    https://i.ytimg.com/vi/${id}/1.jpg`,
+        `    https://i.ytimg.com/vi/${id}/2.jpg`,
+        `    https://i.ytimg.com/vi/${id}/3.jpg`,
+        ``,
+        `  Pasa esas URL a ver_imagen para analizar la miniatura y el estilo visual.`,
+    ].join('\n');
+}
+
+async function ejecutarYoutubeTranscripcion(input) {
+    const id = idDeVideo(input.id);
+    let mod;
+    try { mod = require('youtube-transcript'); }
+    catch { return 'RECHAZADO: falta la librería youtube-transcript en el servidor.'; }
+    try {
+        const partes = await mod.YoutubeTranscript.fetchTranscript(id, input.idioma ? { lang: input.idioma } : {});
+        if (!partes || !partes.length) return `El video '${id}' no tiene transcripción disponible.`;
+        const texto = partes.map((p) => p.text).join(' ').replace(/\s+/g, ' ').trim();
+        const minutos = Math.round((partes[partes.length - 1].offset || 0) / 60000);
+        const recorte = texto.slice(0, 14000);
+        return `Transcripción de '${id}' (${partes.length} fragmentos, ~${minutos} min):\n\n${recorte}` +
+            (texto.length > 14000 ? `\n\n[...recortada, eran ${texto.length} caracteres. Con esto alcanza para ver la estructura.]` : '') +
+            `\n\nAnaliza el PATRÓN (gancho, secciones, intriga, ritmo, cierre). No copies el texto.`;
+    } catch (e) {
+        return `No se pudo obtener la transcripción de '${id}': ${String(e.message || e).slice(0, 120)}`;
+    }
+}
+
+async function ejecutarVerImagen(input) {
+    const key = process.env.OPENAI_API_KEY;
+    if (!key) return 'RECHAZADO: falta OPENAI_API_KEY en el entorno.';
+    const urls = (Array.isArray(input.urls) ? input.urls : [input.urls]).slice(0, 4);
+    const contenido = [
+        { type: 'text', text: `Estás viendo IMÁGENES FIJAS que se te adjuntan. Analiza lo que muestran.\n\n${input.pregunta}\n\nResponde directo sobre lo que aparece en ellas, con detalle y con tu lectura más probable. No digas que no puedes ver imágenes: las tienes delante. Si un punto concreto no se resuelve mirando, dilo en esa parte y sigue con el resto. Lo que no esté en la imagen, no lo inventes.` },
+        ...urls.map((url) => ({ type: 'image_url', image_url: { url } })),
+    ];
+    try {
+        const r = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: 'gpt-4o-mini', max_tokens: 700, messages: [{ role: 'user', content: contenido }] }),
+        });
+        const j = await r.json();
+        if (j.error) return `No se pudo analizar la imagen: ${j.error.message.slice(0, 140)}`;
+        return `Análisis de ${urls.length} imagen(es):\n${j.choices[0].message.content}`;
+    } catch (e) {
+        return `Falló el análisis de imagen: ${String(e.message || e).slice(0, 120)}`;
+    }
+}
+
+async function ejecutarGoogleTrends(input) {
+    let gt;
+    try { gt = require('google-trends-api'); }
+    catch { return 'RECHAZADO: falta la librería google-trends-api en el servidor.'; }
+    const terminos = [input.termino, ...(input.comparar_con ? [input.comparar_con] : [])];
+    try {
+        const crudo = await gt.interestOverTime({
+            keyword: terminos.length > 1 ? terminos : input.termino,
+            geo: input.pais || '',
+            startTime: new Date(Date.now() - 1000 * 60 * 60 * 24 * 365),
+        });
+        const datos = JSON.parse(crudo).default.timelineData;
+        if (!datos || !datos.length) return `Sin datos de tendencia para '${input.termino}'. Suele significar volumen demasiado bajo para que Google lo reporte, lo cual ya es una señal.`;
+        const lineas = terminos.map((t, i) => {
+            const v = datos.map((d) => d.value[i] ?? 0);
+            const ini = v.slice(0, 13).reduce((a, b) => a + b, 0) / 13;
+            const fin = v.slice(-13).reduce((a, b) => a + b, 0) / 13;
+            const cambio = ini > 0 ? Math.round(((fin - ini) / ini) * 100) : 0;
+            const dir = cambio > 15 ? 'SUBIENDO' : cambio < -15 ? 'BAJANDO' : 'ESTABLE';
+            return `  "${t}": ${dir} (${cambio > 0 ? '+' : ''}${cambio}% del primer trimestre al último) | pico ${Math.max(...v)}, promedio ${Math.round(v.reduce((a, b) => a + b, 0) / v.length)}`;
+        });
+        return `Interés de búsqueda del último año${input.pais ? ` en ${input.pais}` : ' (mundial)'}:\n${lineas.join('\n')}\n\nEs interés RELATIVO (0-100), no número de búsquedas.`;
+    } catch (e) {
+        // Google bloquea las peticiones que salen de centros de datos: funciona
+        // unas cuantas veces y luego devuelve HTML en vez de datos. Se avisa
+        // qué hacer en su lugar, porque si no el agente se inventa la
+        // tendencia, que es exactamente lo que hay que evitar.
+        return 'Google Trends no está disponible desde este servidor (Google bloquea las peticiones que salen de centros de datos). ' +
+            'NO inventes la tendencia ni la deduzcas. Usa esto en su lugar, que además mide mejor para un canal de YouTube:\n' +
+            '  1. youtube_buscar con el tema, publicado_despues de hace 12 meses, y otra vez con publicado_despues de hace 3 meses.\n' +
+            '  2. Compara cuántos resultados y qué vistas tienen unos y otros: si lo reciente tiene más vistas, el tema está subiendo.\n' +
+            'Y en el informe escribe "no disponible" en la columna de Google Trends, con la señal de YouTube al lado.';
+    }
+}
+
 async function ejecutarSendEmail(paraReal, asunto, cuerpoHtml, adjuntarImagen) {
     const apiKey = process.env.RESEND_API_KEY;
     if (!apiKey) {
@@ -503,6 +714,105 @@ async function ejecutarSendEmail(paraReal, asunto, cuerpoHtml, adjuntarImagen) {
 // responde 429 con `quota_limit_value: "0"` — el acceso anónimo ya no existe, no es que esté
 // "limitado". La key es gratis y sin tarjeta (Google Cloud Console → habilitar
 // "PageSpeed Insights API" → crear credencial de API key), con 25,000 consultas/día.
+
+// ── YouTube y análisis visual ─────────────────────────────────────────────
+// Nacen del proyecto de canales de YouTube (11 agosto 2026). La metodología
+// pedía Social Blade, VidIQ, Ahrefs y Exploding Topics: todas de paga o que nos
+// bloquean. Estas cubren lo mismo con las APIs que ya se pagan, y sobre todo
+// evitan que un agente INVENTE antigüedades, suscriptores o ratios, que es lo
+// que habría pasado dejándolo con solo search_web.
+const YOUTUBE_TOOLS = [
+    {
+        name: 'youtube_buscar',
+        description:
+            'Busca videos o canales en YouTube con datos reales. Devuelve título, canal, fecha de publicación e id. ' +
+            'Úsala para encontrar canales semilla: filtra por fecha (publicado_despues) y ordena por vistas. ' +
+            'Devuelve ids que luego pasas a youtube_canal o youtube_video para obtener las cifras.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                consulta: { type: 'string', description: 'Qué buscar, en el idioma del mercado que te interesa.' },
+                tipo: { type: 'string', enum: ['video', 'channel'], description: 'Buscar videos o canales. Por defecto video.' },
+                publicado_despues: { type: 'string', description: 'Fecha ISO (ej. 2026-07-01). Sólo resultados posteriores. Úsalo para encontrar lo reciente.' },
+                orden: { type: 'string', enum: ['viewCount', 'date', 'relevance'], description: 'viewCount para lo más visto. Por defecto viewCount.' },
+                idioma_region: { type: 'string', description: 'Código de país de dos letras (MX, ES, US...). Cambia qué resultados salen.' },
+                max: { type: 'number', description: 'Cuántos resultados, hasta 25. Por defecto 10.' },
+            },
+            required: ['consulta'],
+        },
+    },
+    {
+        name: 'youtube_canal',
+        description:
+            'Datos reales de un canal: fecha de creación, ANTIGÜEDAD EN MESES ya calculada, suscriptores, vistas totales y número de videos. ' +
+            'Es lo que reemplaza a Social Blade. Nunca estimes estos números: pídelos aquí.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                id: { type: 'string', description: 'Id del canal (empieza con UC), o su @nombre, o la URL del canal.' },
+            },
+            required: ['id'],
+        },
+    },
+    {
+        name: 'youtube_video',
+        description:
+            'Datos reales de un video: vistas, likes, comentarios, duración, fecha, id del canal, y las URL de su miniatura y de tres fotogramas automáticos del propio video. ' +
+            'Esas URL se las pasas a ver_imagen para analizar miniatura y estilo visual.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                id: { type: 'string', description: 'Id del video o su URL completa.' },
+            },
+            required: ['id'],
+        },
+    },
+    {
+        name: 'youtube_transcripcion',
+        description:
+            'Trae la transcripción completa de un video público. Sirve para analizar la ESTRUCTURA del guion: gancho inicial, secciones, dónde abre intriga, ritmo y cierre. ' +
+            'Analiza el patrón, nunca copies el texto literal: eso es plagio y genera problemas de contenido duplicado.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                id: { type: 'string', description: 'Id del video o su URL completa.' },
+                idioma: { type: 'string', description: 'Código de idioma preferido (es, en...). Si no está, trae el que haya.' },
+            },
+            required: ['id'],
+        },
+    },
+    {
+        name: 'ver_imagen',
+        description:
+            'Mira una o varias imágenes por su URL y responde lo que le preguntes sobre ellas. ' +
+            'Úsala para analizar miniaturas de YouTube (rostro, expresión, texto superpuesto, contraste, flechas) y para deducir el estilo visual de un video a partir de sus fotogramas. ' +
+            'Pregunta cosas concretas y observables, no opiniones.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                urls: { type: 'array', items: { type: 'string' }, description: 'Una a cuatro URL de imágenes.' },
+                pregunta: { type: 'string', description: 'Qué quieres saber de ellas. Sé específico.' },
+            },
+            required: ['urls', 'pregunta'],
+        },
+    },
+    {
+        name: 'google_trends',
+        description:
+            'Curva de interés de búsqueda en Google del último año, por país. Devuelve si el tema va SUBIENDO, ESTABLE o BAJANDO, comparando el promedio de los primeros meses contra los últimos. ' +
+            'Puede comparar varios términos entre sí. Es interés relativo, no volumen absoluto de búsquedas.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                termino: { type: 'string', description: 'Palabra o frase a medir.' },
+                pais: { type: 'string', description: 'Código de país de dos letras (MX, ES, US...). Vacío = mundial.' },
+                comparar_con: { type: 'string', description: 'Opcional: otro término para comparar en la misma escala.' },
+            },
+            required: ['termino'],
+        },
+    },
+];
+
 const PAGESPEED_TOOL = {
     name: 'pagespeed_check',
     description: 'Mide el rendimiento real de una página web pública con Google PageSpeed Insights (Lighthouse) y devuelve sus puntajes (rendimiento, accesibilidad, buenas prácticas, SEO) y métricas de carga (LCP, CLS, TBT, FCP), además de las oportunidades de mejora más pesadas. Úsala para diagnosticar el sitio de un negocio con datos reales medidos, nunca estimes ni supongas estos números. Si le pasas guardar_crudo_en, además del resumen guarda el reporte COMPLETO de Lighthouse (las ~150 auditorías, no solo el resumen) y la captura de pantalla real del sitio medido, como archivos dentro de tus carpetas autorizadas.',
@@ -1078,6 +1388,17 @@ function encarpetarPorProyecto(rutaRelativa, proyecto, agente, nombreTarea) {
     const limpia = String(rutaRelativa).replace(/^\.\//, '').replace(/^\/+/, '');
     const partes = limpia.split('/').filter(Boolean);
     if (partes[0] !== 'vault') return rutaRelativa;
+
+    // Carpetas compartidas entre proyectos: se les mete el proyecto como primer
+    // nivel. Sin esto, el panel de CADA proyecto mostraba las investigaciones de
+    // TODOS: Carlos abrió el proyecto de YouTube el 11 agosto 2026 y le salieron
+    // las diez carpetas de legal y seguros de Creativa Balam.
+    const COMPARTIDAS = ['7-investigacion-mercado', '9-auditoria-web'];
+    if (COMPARTIDAS.includes(partes[1])) {
+        if (partes[2] === proyecto) return rutaRelativa; // ya viene encarpetada
+        return ['vault', partes[1], proyecto, ...partes.slice(2)].join('/');
+    }
+
     if (partes[1] !== '1-desk') return rutaRelativa;
 
     // La carpeta de la tarea: los entregables de cada tarea viven juntos y
@@ -1121,6 +1442,61 @@ async function ejecutarTool(nombre, input, writePaths, dbAccess, codeRepoAccess,
             if (!fs.existsSync(rutaAbs)) return `El archivo '${input.ruta}' no existe.`;
             return fs.readFileSync(rutaAbs, 'utf-8');
         }
+        case 'buscar_en_notas': {
+            // Existe porque hasta el 16 agosto 2026 no había forma de mirar
+            // dentro de un archivo sin cargarlo entero. `criticos` tenía
+            // instruido comparar contra el thread del proyecto, y el de
+            // gnga-web3 ya pesaba 90 KB: una sola lectura, reenviada en cada
+            // turno de una corrida de 24, costaba ~489 mil tokens — la cuarta
+            // parte de la corrida, sólo por releer lo mismo.
+            const rutaAbs = resolverRutaSegura(input.ruta);
+            if (!fs.existsSync(rutaAbs)) return `La ruta '${input.ruta}' no existe.`;
+
+            const contexto = Number.isFinite(input.contexto) ? Math.max(0, Math.min(10, input.contexto)) : 2;
+            const aguja = String(input.texto || '').toLowerCase();
+            if (!aguja) return 'Falta el texto a buscar.';
+
+            const EXTENSIONES = new Set(['.md', '.txt', '.json', '.tsx', '.ts', '.js', '.sql', '.csv', '.yml', '.yaml']);
+            const MAX_COINCIDENCIAS = 60; // tope: si hay más, el término es demasiado genérico
+
+            const archivos = [];
+            (function recorrer(p) {
+                const st = fs.statSync(p);
+                if (st.isFile()) {
+                    if (EXTENSIONES.has(path.extname(p).toLowerCase())) archivos.push(p);
+                    return;
+                }
+                for (const e of fs.readdirSync(p, { withFileTypes: true })) {
+                    if (e.name === 'node_modules' || e.name.startsWith('.')) continue;
+                    recorrer(path.join(p, e.name));
+                }
+            })(rutaAbs);
+
+            const salida = [];
+            let total = 0;
+            for (const archivo of archivos) {
+                if (total >= MAX_COINCIDENCIAS) break;
+                const lineas = fs.readFileSync(archivo, 'utf-8').split('\n');
+                const rel = path.relative(PROJECT_ROOT, archivo);
+                for (let i = 0; i < lineas.length && total < MAX_COINCIDENCIAS; i++) {
+                    if (!lineas[i].toLowerCase().includes(aguja)) continue;
+                    total++;
+                    const desde = Math.max(0, i - contexto);
+                    const hasta = Math.min(lineas.length - 1, i + contexto);
+                    const bloque = lineas
+                        .slice(desde, hasta + 1)
+                        .map((l, j) => `${desde + j + 1 === i + 1 ? '>' : ' '} ${desde + j + 1}: ${l}`)
+                        .join('\n');
+                    salida.push(`--- ${rel}:${i + 1}\n${bloque}`);
+                }
+            }
+
+            if (total === 0) return `Sin coincidencias de "${input.texto}" en '${input.ruta}' (${archivos.length} archivos revisados).`;
+            const aviso = total >= MAX_COINCIDENCIAS
+                ? `\n\n(Se cortó en ${MAX_COINCIDENCIAS} coincidencias: el término es muy genérico, acota la búsqueda.)`
+                : '';
+            return `${total} coincidencia(s) de "${input.texto}" en '${input.ruta}':\n\n${salida.join('\n\n')}${aviso}`;
+        }
         case 'write_file': {
             // Acomoda por proyecto ANTES de validar: la autorizacion sigue
             // siendo la misma (1-desk/{proyecto} sigue estando dentro de
@@ -1133,6 +1509,28 @@ async function ejecutarTool(nombre, input, writePaths, dbAccess, codeRepoAccess,
             fs.mkdirSync(path.dirname(rutaAbs), { recursive: true });
             fs.writeFileSync(rutaAbs, input.contenido, 'utf-8');
             return `Archivo guardado en '${rutaFinal}' (${input.contenido.length} caracteres).`;
+        }
+        case 'append_file': {
+            // Existe para que un documento largo pueda crecer sin releerse. El
+            // costo de un agente no está en lo que escribe, está en lo que se
+            // le reenvía cada turno: leer un hilo de 80 KB en el turno 3 de una
+            // corrida de 30 se paga 27 veces.
+            const rutaFinal = encarpetarPorProyecto(input.ruta, proyecto, agenteActual, nombreTarea);
+            if (!rutaEstaAutorizada(rutaFinal, writePaths)) {
+                return `RECHAZADO: este agente no tiene autoridad de escritura sobre '${input.ruta}'. Rutas permitidas: ${writePaths.join(', ')}`;
+            }
+            const rutaAbs = resolverRutaSegura(rutaFinal);
+            const existia = fs.existsSync(rutaAbs);
+            fs.mkdirSync(path.dirname(rutaAbs), { recursive: true });
+            if (existia) {
+                const previo = fs.readFileSync(rutaAbs, 'utf-8');
+                const separador = previo.endsWith('\n\n') ? '' : previo.endsWith('\n') ? '\n' : '\n\n';
+                fs.appendFileSync(rutaAbs, separador + input.contenido, 'utf-8');
+            } else {
+                fs.writeFileSync(rutaAbs, input.contenido, 'utf-8');
+            }
+            const total = fs.statSync(rutaAbs).size;
+            return `Agregado al final de '${rutaFinal}' (${input.contenido.length} caracteres nuevos; el archivo quedó en ${total}). ${existia ? 'No hizo falta leerlo.' : 'El archivo no existía y se creó.'}`;
         }
         case 'edit_file': {
             // Existe porque write_file obliga a reescribir el documento entero.
@@ -1234,6 +1632,30 @@ async function ejecutarTool(nombre, input, writePaths, dbAccess, codeRepoAccess,
             if (!imageAccess) return 'RECHAZADO: este agente no tiene autoridad para generar imágenes (falta image_access: true en su playbook).';
             return await ejecutarGenerateImage(input.prompt, input.ruta, input.calidad, writePaths, imageHqAccess);
         }
+        case 'youtube_buscar': {
+            if (!webAccess) return 'RECHAZADO: este agente no tiene autoridad para acceder a internet (falta web_access: true en su playbook).';
+            return await ejecutarYoutubeBuscar(input);
+        }
+        case 'youtube_canal': {
+            if (!webAccess) return 'RECHAZADO: este agente no tiene autoridad para acceder a internet (falta web_access: true en su playbook).';
+            return await ejecutarYoutubeCanal(input);
+        }
+        case 'youtube_video': {
+            if (!webAccess) return 'RECHAZADO: este agente no tiene autoridad para acceder a internet (falta web_access: true en su playbook).';
+            return await ejecutarYoutubeVideo(input);
+        }
+        case 'youtube_transcripcion': {
+            if (!webAccess) return 'RECHAZADO: este agente no tiene autoridad para acceder a internet (falta web_access: true en su playbook).';
+            return await ejecutarYoutubeTranscripcion(input);
+        }
+        case 'ver_imagen': {
+            if (!webAccess) return 'RECHAZADO: este agente no tiene autoridad para acceder a internet (falta web_access: true en su playbook).';
+            return await ejecutarVerImagen(input);
+        }
+        case 'google_trends': {
+            if (!webAccess) return 'RECHAZADO: este agente no tiene autoridad para acceder a internet (falta web_access: true en su playbook).';
+            return await ejecutarGoogleTrends(input);
+        }
         case 'send_email': {
             if (!emailAccess) return 'RECHAZADO: este agente no tiene autoridad para mandar correos (falta email_access: true en su playbook).';
             return await ejecutarSendEmail(input.para, input.asunto, input.cuerpo_html, input.adjuntar_imagen);
@@ -1312,7 +1734,7 @@ async function procesarJob(job) {
     const emailAccess = /email_access:\s*true/i.test(playbookContenido);
     let herramientas = dbAccess ? [...TOOLS, SQL_TOOL, AIRTABLE_TOOL] : [...TOOLS];
     if (codeRepoAccess) herramientas = [...herramientas, ...CODE_REPO_TOOLS];
-    if (webAccess) herramientas = [...herramientas, WEB_FETCH_TOOL, BRAND_EXTRACT_TOOL, PAGESPEED_TOOL];
+    if (webAccess) herramientas = [...herramientas, WEB_FETCH_TOOL, BRAND_EXTRACT_TOOL, PAGESPEED_TOOL, ...YOUTUBE_TOOLS];
     if (searchAccess) herramientas = [...herramientas, SEARCH_TOOL];
     if (imageAccess) herramientas = [...herramientas, IMAGE_GEN_TOOL];
     if (emailAccess) herramientas = [...herramientas, EMAIL_TOOL];

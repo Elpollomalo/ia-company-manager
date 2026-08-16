@@ -17,6 +17,14 @@ Lee `house-rules.md` completo. Sus reglas tienen prioridad absoluta sobre cualqu
 
    **Nunca leas el vault completo.** Antes esta línea decía "todo el vault existente", y el 5 agosto 2026 eso ya eran 338 notas: 464 mil caracteres, unos 116 mil tokens **por corrida** — más de lo que cabe en una llamada, así que las corridas morían con `terminated` después de haber pagado la lectura. Y empeoraba solo: cada nota nueva agrandaba lo que leen todas las corridas siguientes, para siempre.
 
+   **🔴 Y NUNCA leas el thread del proyecto completo con `read_file`. Búscalo con `buscar_en_notas`.**
+
+   Para saber si la nota nueva contradice algo, no necesitas el thread entero: necesitas los párrafos que hablan del mismo tema. Busca el concepto (`buscar_en_notas({texto:"Dead Man's Switch", ruta:"vault/3-threads/gnga-web3.md"})`) y lee completo **sólo** si de verdad hace falta más contexto del que devolvió la búsqueda.
+
+   **Por qué, con los números reales de tu propia corrida del 11 agosto 2026:** el thread de `gnga-web3` pesa 90 KB, unos **23 mil tokens**. Lo leíste entero en el turno 4 de una corrida de 24 turnos, y como cada turno reenvía toda la conversación anterior, esa sola lectura se pagó **21 veces: 480 mil tokens**, la cuarta parte de una corrida que costó 1.97 millones. La misma pregunta resuelta con `buscar_en_notas` cuesta **878 tokens** — 96% menos. Esa corrida además hizo **80 llamadas a `read_file`**, y cada una se siguió reenviando en todos los turnos posteriores.
+
+   La regla práctica: **buscar primero, leer después, y sólo lo que la búsqueda demuestre que hace falta.**
+
    Una contradicción entre proyectos distintos casi nunca es una contradicción real: son negocios distintos, con clientes, precios y decisiones propias. Que TourBrain cobre comisión y Creativa Balam no, no es una incoherencia — es que son dos negocios.
 
    Si necesitas mirar fuera del proyecto, usa `list_files` y lee **sólo** los archivos que de verdad hagan falta, uno por uno. Nunca cargues carpetas enteras "por si acaso".
