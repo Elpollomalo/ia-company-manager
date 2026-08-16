@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="__LANG__"><head><meta charset="utf-8">
+<style>
+  @page { size: letter; margin: 20mm 18mm 18mm; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: "DejaVu Sans", Arial, Helvetica, sans-serif;
+    color: #17171b; font-size: 11.2pt; line-height: 1.62; margin: 0;
+  }
+  /* Membrete: la marca de la agencia tal como está en creativabalam.com.mx,
+     el prompt verde y el nombre en monoespaciada. En claro y no en negro:
+     esto se imprime y se lee en el celular, no se proyecta. */
+  .membrete {
+    display: flex; align-items: baseline; justify-content: space-between;
+    border-bottom: 2px solid #0f0f12; padding-bottom: 9px; margin-bottom: 26px;
+  }
+  .marca { font-family: "DejaVu Sans Mono", monospace; font-size: 12.5pt; font-weight: 700; }
+  .marca .prompt { color: #00a86b; margin-right: 5px; }
+  .quien { font-size: 9.2pt; color: #6a6a72; text-align: right; line-height: 1.45; }
+  .quien strong { color: #17171b; display: block; font-size: 10pt; }
+
+  h1 { font-size: 21pt; line-height: 1.2; margin: 0 0 4px; letter-spacing: -0.4px; }
+  /* Los H1 que no son el título del documento marcan una fase: llevan aire y
+     una línea arriba para que se lean como corte, no como otro párrafo. */
+  h1 + .bajada + h2 { margin-top: 26px; }
+  h1:not(:first-of-type) {
+    margin-top: 34px; padding-top: 20px;
+    border-top: 3px solid #00a86b; page-break-before: auto;
+  }
+  code {
+    font-family: "DejaVu Sans Mono", monospace; font-size: 0.92em;
+    background: #f2f2f5; padding: 1px 4px; border-radius: 3px;
+  }
+  .bajada { color: #6a6a72; font-size: 10.5pt; margin: 0 0 26px; }
+  h2 {
+    font-size: 13pt; margin: 26px 0 10px; padding-left: 11px;
+    border-left: 4px solid #00a86b; line-height: 1.3;
+  }
+  h3 {
+    font-size: 11.2pt; margin: 18px 0 8px; color: #17171b; font-weight: 700;
+  }
+  p { margin: 0 0 11px; }
+  ul, ol { margin: 0 0 11px; padding-left: 22px; }
+  li { margin-bottom: 6px; padding-left: 3px; }
+  strong { font-weight: 700; }
+  h2, h3, li, p, table { page-break-inside: avoid; }
+  h2, h3 { page-break-after: avoid; }
+
+  table { width: 100%; border-collapse: collapse; margin: 0 0 14px; font-size: 10.4pt; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #d8d8de; vertical-align: top; }
+  thead th { border-bottom: 2px solid #0f0f12; font-weight: 700; }
+  tbody tr:last-child td { border-bottom: none; }
+
+  .pie {
+    margin-top: 34px; border-top: 1px solid #d8d8de; padding-top: 10px;
+    font-size: 8.8pt; color: #8a8a93; display: flex; justify-content: space-between;
+  }
+</style></head>
+<body>
+  <div class="membrete">
+    <span class="marca"><span class="prompt">&gt;</span>creativa_balam</span>
+    <span class="quien">
+      <strong>Carlos Salazar Balam</strong>
+      __QUIEN_ROL__
+    </span>
+  </div>
+  __CUERPO__
+  <div class="pie">
+    <span>__PIE_IZQ__</span>
+    <span>__PIE_DER__</span>
+  </div>
+</body></html>
