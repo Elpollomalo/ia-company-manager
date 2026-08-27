@@ -1456,7 +1456,12 @@ async function ejecutarTool(nombre, input, writePaths, dbAccess, codeRepoAccess,
             const aguja = String(input.texto || '').toLowerCase();
             if (!aguja) return 'Falta el texto a buscar.';
 
-            const EXTENSIONES = new Set(['.md', '.txt', '.json', '.tsx', '.ts', '.js', '.sql', '.csv', '.yml', '.yaml']);
+            // .log se agregó el 27 agosto 2026: el agente `mantenimiento` necesita poder
+            // buscar en worker.log por fecha en vez de leerlo completo con read_file --
+            // sin esto, buscar_en_notas sobre un .log devuelve "sin coincidencias" en
+            // silencio (la extensión no entra al filtro), no un error, así que el bug
+            // pasaba desapercibido hasta que alguien probaba de verdad.
+            const EXTENSIONES = new Set(['.md', '.txt', '.json', '.tsx', '.ts', '.js', '.sql', '.csv', '.yml', '.yaml', '.log']);
             const MAX_COINCIDENCIAS = 60; // tope: si hay más, el término es demasiado genérico
 
             const archivos = [];
@@ -1843,6 +1848,13 @@ async function procesarJob(job) {
     // resulto carisima sin que nadie pudiera verlo (5 agosto 2026).
     let tokensEntrada = 0;
     let tokensSalida = 0;
+    // Desglose real de caché (20 agosto 2026): el total de entrada NO cuesta
+    // parejo -- DeepSeek cobra el cache hit ~30 veces más barato que el cache
+    // miss (ver pricing), pero hasta ahora solo se sumaba el total sin decir
+    // cuánto de eso era hit. Una corrida de "2.2M tokens" puede costar muy
+    // distinto según ese desglose, y era invisible.
+    let tokensCacheHit = 0;
+    let tokensCacheMiss = 0;
 
     if (provider === 'deepseek') {
         // DeepSeek habla formato OpenAI: system va como mensaje normal (no hay parámetro
@@ -1918,6 +1930,8 @@ async function procesarJob(job) {
                     if (evento.usage) {
                         tokensEntrada += evento.usage.prompt_tokens || 0;
                         tokensSalida += evento.usage.completion_tokens || 0;
+                        tokensCacheHit += evento.usage.prompt_cache_hit_tokens || 0;
+                        tokensCacheMiss += evento.usage.prompt_cache_miss_tokens || 0;
                     }
                     if (!evento.choices || evento.choices.length === 0) continue;
 
@@ -2005,6 +2019,11 @@ async function procesarJob(job) {
             // caro seria justo el que no se cobra.
             tokensEntrada += ultimaRespuesta.usage?.input_tokens || 0;
             tokensSalida += ultimaRespuesta.usage?.output_tokens || 0;
+            // Equivalente de Anthropic al cache hit/miss de DeepSeek (nombres
+            // de campo distintos, mismo concepto): cuánto del envío se sirvió
+            // de la caché en vez de procesarse completo.
+            tokensCacheHit += ultimaRespuesta.usage?.cache_read_input_tokens || 0;
+            tokensCacheMiss += ultimaRespuesta.usage?.cache_creation_input_tokens || 0;
 
             console.log(`↳ [${agente}] turno ${turnos} — stop_reason: ${ultimaRespuesta.stop_reason}`);
 
@@ -2080,8 +2099,11 @@ async function procesarJob(job) {
         ? `\n\n⚠️ **Se agotaron los ${MAX_TURNOS_AGENTE} turnos**: el agente se cortó mientras trabajaba. Lo que haya escrito puede estar incompleto.\n`
         : '';
 
+    const desgloseCache = (tokensCacheHit || tokensCacheMiss)
+        ? `\n- Entrada de caché (barato): ${tokensCacheHit.toLocaleString('es-MX')}\n- Entrada nueva (caro): ${tokensCacheMiss.toLocaleString('es-MX')}`
+        : '';
     const consumo = tokensEntrada || tokensSalida
-        ? `\n\n## Consumo\n- Turnos: ${turnos}\n- Tokens de entrada: ${tokensEntrada.toLocaleString('es-MX')}\n- Tokens de salida: ${tokensSalida.toLocaleString('es-MX')}\n- Total: ${(tokensEntrada + tokensSalida).toLocaleString('es-MX')}\n`
+        ? `\n\n## Consumo\n- Turnos: ${turnos}\n- Tokens de entrada: ${tokensEntrada.toLocaleString('es-MX')}\n- Tokens de salida: ${tokensSalida.toLocaleString('es-MX')}\n- Total: ${(tokensEntrada + tokensSalida).toLocaleString('es-MX')}${desgloseCache}\n`
         : '';
     const contenidoSalida = `# Corrida de ${agente} — ${proyecto}\n\n## Respuesta final${avisoIncompleta}\n${resultadoIA}\n\n## Herramientas invocadas\n${bitacoraTexto}\n${consumo}`;
 
@@ -2133,6 +2155,8 @@ async function procesarJob(job) {
         herramientasInvocadas: bitacoraHerramientas.length,
         tokensEntrada,
         tokensSalida,
+        tokensCacheHit,
+        tokensCacheMiss,
         turnos,
         enlacesEntregables,
         // Para el aviso: el nombre dice QUE se produjo (cosa que un link solo no
@@ -2167,6 +2191,7 @@ const DESCRIPCION_AGENTE = {
     'catalogadores': '🏷️ Catalogación',
     'cartografos': '🗺️ Mapeo de información',
     'scouts': '🛰️ Recolección de fuentes',
+    'guionistas': '✍️ Guion de video (versión 1)',
 };
 
 function etiquetaAgente(agente) {
