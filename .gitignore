@@ -5,3 +5,9 @@ vault/
 *.bak
 worker.log*
 corridas.jsonl
+
+# prospeccion-diaria/: código versionado, datos generados no (se regeneran solos)
+prospeccion-diaria/2026-*/
+prospeccion-diaria/*.json
+prospeccion-diaria/.tg-offset
+prospeccion-diaria/*.bak-*
