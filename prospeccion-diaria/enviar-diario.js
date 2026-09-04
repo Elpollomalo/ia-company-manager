@@ -17,6 +17,16 @@ const { notificar, escaparHtml } = require('/root/agente-constructor/scripts/tel
 
 const BASE = '/root/agente-constructor/prospeccion-diaria';
 const HOY = new Date().toISOString().slice(0, 10);
+
+// El dedup por DOMINIO existe por el caso Los Cinco Soles (un mismo negocio
+// con varios buzones propios: wecare@ y hectorh@ no deben recibir dos correos).
+// En un proveedor genérico eso no aplica: "mismo dominio" no significa "mismo
+// negocio", y como ya se le escribió a otros prospectos en Gmail/Hotmail, todo
+// candidato nuevo con ese tipo de correo tumbaba el lote completo. Ahí el
+// dedup es sólo por correo exacto (4 septiembre 2026, antes de que pasara).
+const GENERICOS = new Set(['gmail.com', 'googlemail.com', 'hotmail.com', 'hotmail.es', 'hotmail.com.mx',
+  'outlook.com', 'outlook.es', 'live.com', 'live.com.mx', 'yahoo.com', 'yahoo.com.mx', 'yahoo.es',
+  'icloud.com', 'me.com', 'aol.com', 'msn.com', 'proton.me', 'protonmail.com', 'gmx.com', 'mail.com']);
 const DIR_HOY = path.join(BASE, HOY);
 const CORREOS_JS = path.join(DIR_HOY, 'correos.js');
 
@@ -69,7 +79,7 @@ async function enviar() {
   const choques = pendientes.filter(c => {
     const correo = (c.para || '').toLowerCase();
     const dom = correo.split('@')[1];
-    return vistos[correo] || (dom && dominiosVistos.has(dom));
+    return vistos[correo] || (dom && !GENERICOS.has(dom) && dominiosVistos.has(dom));
   });
   if (choques.length) {
     await notificar(`🛑 ${HOY}: ABORTADO, ya se les escribió antes: ${choques.map(c => escaparHtml(c.para)).join(', ')}`);

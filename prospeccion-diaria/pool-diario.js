@@ -30,6 +30,14 @@ const POOL_PATH = path.join(BASE, 'pool-verificado.json');
 const DESCARTADOS_PATH = path.join(BASE, 'descartados-permanentes.json'); // dominios que nunca calificarán (sin MX, ya contactados, etc.) — no se re-intentan cada corrida
 const UMBRAL_MINIMO = 12; // si el pool baja de esto, se repone; si no se puede, se avisa
 
+// Mismo criterio que enviar-diario.js: el dedup por dominio es por el caso Los
+// Cinco Soles (un negocio, varios buzones propios). En Gmail/Hotmail "mismo
+// dominio" no significa "mismo negocio", así que ahí sólo cuenta el correo
+// exacto -- si no, ningún prospecto con correo genérico volvería a calificar.
+const GENERICOS = new Set(['gmail.com', 'googlemail.com', 'hotmail.com', 'hotmail.es', 'hotmail.com.mx',
+  'outlook.com', 'outlook.es', 'live.com', 'live.com.mx', 'yahoo.com', 'yahoo.com.mx', 'yahoo.es',
+  'icloud.com', 'me.com', 'aol.com', 'msn.com', 'proton.me', 'protonmail.com', 'gmx.com', 'mail.com']);
+
 function leerJson(p, porDefecto) { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return porDefecto; } }
 function guardarJson(p, data) { fs.writeFileSync(p, JSON.stringify(data, null, 2)); }
 
@@ -230,7 +238,11 @@ async function historialResend() {
       if (dominiosVistos.has(dom)) { descartados[dom] = 'dominio_ya_contactado'; continue; }
       if (!n.correo) { descartados[dom] = 'sin_correo_encontrado'; continue; }
       if (historial[n.correo.toLowerCase()]) { descartados[dom] = 'ya_contactado'; continue; }
-      if (!tieneMx(dom)) { descartados[dom] = 'sin_mx'; continue; }
+      const domCorreo = n.correo.toLowerCase().split('@')[1];
+      if (!GENERICOS.has(domCorreo) && dominiosVistos.has(domCorreo)) { descartados[dom] = 'dominio_ya_contactado'; continue; }
+      // El MX que importa es el del buzón al que se manda, no el del sitio web:
+      // un negocio con dominio propio puede atender sólo por Gmail.
+      if (!tieneMx(domCorreo)) { descartados[dom] = 'sin_mx'; continue; }
 
       const medida = await medirVelocidad(dom);
       medidos++;
