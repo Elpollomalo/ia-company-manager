@@ -278,8 +278,12 @@ function seleccionarQueries(config) {
             tipo_campana: 'invisible_google',
             nombre: neg.nombre,
             dominio: dom,
-            zona: neg.zona || item.zona,
-            giro: item.giro,
+            // La zona del informe del vault suele ser 'desconocida' porque se
+            // infiere del nombre del archivo. Si es el caso, vale más la zona
+            // de la BÚSQUEDA que lo encontró: de ella depende que el correo
+            // pida visita local o videollamada.
+            zona: (neg.zona && neg.zona !== 'desconocida') ? neg.zona : item.zona,
+            giro: item.giro || neg.giro,
             correo: neg.correo,
             dato_duro: `No aparece en top 10 de Google para "${item.query}"`,
             contexto_extra: `${organicos.length} resultados orgánicos analizados. Competidores posicionados: ${organicos.slice(0, 3).map(o => o.dominio).join(', ')}`
@@ -307,8 +311,8 @@ function seleccionarQueries(config) {
               tipo_campana: 'sin_ads',
               nombre: neg.nombre,
               dominio: dom,
-              zona: neg.zona || item.zona,
-              giro: item.giro,
+              zona: (neg.zona && neg.zona !== 'desconocida') ? neg.zona : item.zona,
+              giro: item.giro || neg.giro,
               correo: neg.correo,
               dato_duro: `Su competencia paga ads en "${item.query}" y ${neg.nombre} no`,
               contexto_extra: `Anunciantes activos: ${ads.map(a => a.dominio).join(', ')}`

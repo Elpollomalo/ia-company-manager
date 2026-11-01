@@ -30,8 +30,10 @@ const Database = require('/root/ponexo-root/node_modules/better-sqlite3');
 const BASE = '/root/agente-constructor/prospeccion-diaria';
 
 // No mandar correos sábado ni domingo — las oficinas no trabajan y no los leen.
+// --dry-run se salta esta regla a propósito: sirve justo para revisar en fin de
+// semana qué se mandaría el lunes, sin escribir ni encolar nada.
 const diaHoy = new Date().getDay(); // 0=domingo, 6=sábado
-if (diaHoy === 0 || diaHoy === 6) {
+if ((diaHoy === 0 || diaHoy === 6) && !process.argv.includes('--dry-run')) {
   console.log(`Hoy es ${diaHoy === 0 ? 'domingo' : 'sábado'}, no se mandan correos de prospección.`);
   process.exit(0);
 }
@@ -177,6 +179,11 @@ function fichaCandiato(c, i) {
 (async () => {
   fs.mkdirSync(DIR_HOY, { recursive: true });
 
+  // --dry-run: muestra qué elegiría y con qué se quedaría el pool, sin
+  // tocar nada ni encolar redacción. Sirve para verificar en domingo o antes
+  // de cambiar la mezcla de tipos sin riesgo de mandar correos.
+  const DRY_RUN = process.argv.includes('--dry-run');
+
   if (!fs.existsSync(POOL_PATH)) {
     await notificar('⚠️ Prospección diaria: no existe pool-verificado.json. Correr pool-diario.js primero.');
     return;
@@ -188,8 +195,30 @@ function fichaCandiato(c, i) {
     return;
   }
 
-  // ── Tomar 8 del pool (mezclando tipos) y sacarlos del pool ──────────────
+  // ── Tomar N del pool (mezclando tipos) y sacarlos del pool ──────────────
   const elegidos = elegirMezclados(pool, CUANTOS);
+
+  if (DRY_RUN) {
+    const porTipo = elegidos.reduce((acc, c) => {
+      const t = c.tipo_campana || 'sitio_lento';
+      acc[t] = (acc[t] || 0) + 1;
+      return acc;
+    }, {});
+    const porZona = elegidos.reduce((acc, c) => {
+      const z = c.zona || 'desconocida';
+      acc[z] = (acc[z] || 0) + 1;
+      return acc;
+    }, {});
+    console.log(`[dry-run] ${HOY}: elegiría ${elegidos.length} de ${pool.length} en el pool`);
+    console.log('[dry-run] por tipo:', porTipo);
+    console.log('[dry-run] por zona:', porZona);
+    for (const c of elegidos) {
+      console.log(`  - ${c.nombre} | ${c.tipo_campana || 'sitio_lento'} | ${c.zona || '?'} | ${c.correo}`);
+    }
+    console.log('[dry-run] no se escribió nada ni se encoló redacción.');
+    return;
+  }
+
   const elegidosSet = new Set(elegidos.map((c) => c.correo || c.dominio || c.nombre));
   const restante = pool.filter((c) => !elegidosSet.has(c.correo || c.dominio || c.nombre));
   fs.writeFileSync(POOL_PATH, JSON.stringify(restante, null, 2));

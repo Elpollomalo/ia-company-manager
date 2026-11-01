@@ -4,7 +4,7 @@
     "cozumel": ["buceo", "hoteles", "restaurantes", "tours", "spas", "dentistas", "rentadoras"],
     "playa-del-carmen": ["hoteles", "restaurantes", "tours", "buceo", "nightlife", "dentistas", "bienes-raices"]
   },
-  "volumen_diario": 8,
+  "volumen_diario": 5,
   "umbral_pool": 20,
   "auto_investigar": true,
   "auto_investigar_limite_diario": 2

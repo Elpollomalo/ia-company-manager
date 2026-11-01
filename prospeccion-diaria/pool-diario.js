@@ -29,7 +29,19 @@ const ZONAS_CONOCIDAS = ['cozumel', 'cancun', 'playa-del-carmen', 'bacalar', 'me
 const BASE = '/root/agente-constructor/prospeccion-diaria';
 const POOL_PATH = path.join(BASE, 'pool-verificado.json');
 const DESCARTADOS_PATH = path.join(BASE, 'descartados-permanentes.json'); // dominios que nunca calificarán (sin MX, ya contactados, etc.) — no se re-intentan cada corrida
-const UMBRAL_MINIMO = 12; // si el pool baja de esto, se repone; si no se puede, se avisa
+const UMBRAL_MINIMO = (() => {
+  // El umbral vive en config/zonas-giros.json para poder ajustarlo sin tocar
+  // código. Antes estaba hardcodeado (12) y el archivo de config decía 20:
+  // el pool "estaba bien" según el script y "bajo" según la config, y nadie
+  // reponía nada. Default 20 si el archivo no se puede leer.
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join(BASE, 'config/zonas-giros.json'), 'utf8'));
+    const u = Number(cfg.umbral_pool);
+    return Number.isFinite(u) && u > 0 ? u : 20;
+  } catch {
+    return 20;
+  }
+})();
 
 // Mismo criterio que enviar-diario.js: el dedup por dominio es por el caso Los
 // Cinco Soles (un negocio, varios buzones propios). En Gmail/Hotmail "mismo
