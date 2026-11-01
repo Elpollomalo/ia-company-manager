@@ -24,6 +24,7 @@ const { notificar, escaparHtml } = require('/root/agente-constructor/scripts/tel
 
 const VAULT_AUDITORIA = '/root/agente-constructor/vault/9-auditoria-web/creativa-balam';
 const VAULT_INVESTIGACION = '/root/agente-constructor/vault/7-investigacion-mercado/creativa-balam';
+const { negociosDeTablas } = require('./lib/nombres');
 const ZONAS_CONOCIDAS = ['cozumel', 'cancun', 'playa-del-carmen', 'bacalar', 'merida', 'tulum', 'progreso'];
 const BASE = '/root/agente-constructor/prospeccion-diaria';
 const POOL_PATH = path.join(BASE, 'pool-verificado.json');
@@ -92,21 +93,15 @@ function inferirZona(archivo) {
 // Los informes de investigadores traen tablas markdown, no bloques "### ":
 // | Negocio | URL | Email | Teléfono | Notas de sitio |
 function parsearInvestigacion(archivo) {
-  const lineas = fs.readFileSync(archivo, 'utf8').split('\n');
+  const texto = fs.readFileSync(archivo, 'utf8');
   const zona = inferirZona(archivo);
   const negocios = [];
-  for (let i = 0; i < lineas.length; i++) {
-    if (!/^\|.*negocio.*\|.*url.*\|/i.test(lineas[i])) continue;
-    if (!/^\|[\s:-]+\|/.test(lineas[i + 1] || '')) continue;
-    for (let j = i + 2; j < lineas.length; j++) {
-      if (!/^\|.*\|$/.test(lineas[j])) break;
-      const [nombreRaw, urlRaw, correoRaw] = lineas[j].split('|').slice(1, -1).map(c => (c || '').trim());
-      const nombre = (nombreRaw || '').replace(/[*_]/g, '').trim();
-      const url = (urlRaw || '').replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].replace(/[*_]/g, '').trim();
-      const correo = (correoRaw || '').match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/)?.[0] || null;
-      if (!nombre || !url || !/\.[a-z]{2,}$/i.test(url)) continue;
-      negocios.push({ zona, nombre, url, correo });
-    }
+  // Las columnas se localizan por encabezado, y el nombre se valida antes de
+  // aceptarlo — ver lib/nombres.js (bug del 8 oct: entraban notas de tabla
+  // como "Con sitio web propio (visitados)" en lugar del nombre del negocio).
+  for (const n of negociosDeTablas(texto)) {
+    if (!n.dominio) continue;
+    negocios.push({ zona, nombre: n.nombre, url: `https://${n.dominio}`, correo: n.correo });
   }
   return negocios;
 }

@@ -86,9 +86,62 @@ async function enviar() {
     return;
   }
 
-  // ── Envío con espaciado de 90 s ─────────────────────────────────────────
-  const apunte = t => fs.appendFileSync(LOG, `${new Date().toISOString()}  ${t}\n`);
+  // ── Candado 2: el asunto tiene que nombrar al negocio ───────────────────
+  // Bug del 8 de octubre: dos correos salieron con asunto genérico
+  // ("No aparecen en Google cuando buscan buceo en Cozumel") y uno sin
+  // asunto, porque el nombre del negocio venía mal parseado del informe.
+  // Un correo de prospección sin el nombre del negocio se lee como spam,
+  // así que aquí se bloquea y se reporta en vez de mandarlo.
+  const { asuntoNombraNegocio } = require('./lib/nombres');
+  const elegidosPorCorreo = {};
+  try {
+    for (const e of JSON.parse(fs.readFileSync(path.join(DIR_HOY, 'elegidos.json'), 'utf8'))) {
+      if (e.correo) elegidosPorCorreo[e.correo.toLowerCase()] = e;
+    }
+  } catch {}
+
+  const invalidos = [];
   for (const c of pendientes) {
+    const eleg = elegidosPorCorreo[(c.para || '').toLowerCase()] || {};
+    const veredicto = asuntoNombraNegocio(c.asunto, eleg.nombre);
+    if (veredicto.ok) continue;
+    invalidos.push({ c, motivo: veredicto.motivo });
+  }
+
+  if (invalidos.length) {
+    for (const { c, motivo } of invalidos) {
+      fs.appendFileSync(LOG, `${new Date().toISOString()}  RECHAZADO ${c.para}  ${motivo}\n`);
+    }
+    await notificar(
+      `\u26d4 <b>${HOY}: ${invalidos.length} correo(s) NO se enviaron</b> \u2014 el asunto no nombra al negocio.\n` +
+      invalidos.map(({ c, motivo }) => `\u2022 <code>${escaparHtml(c.para)}</code>: ${escaparHtml(motivo)}`).join('\n') +
+      `\n\nLos dem\u00e1s del lote s\u00ed se mandan.`,
+      { html: true });
+  }
+
+  const aEnviar = pendientes.filter(c => !invalidos.some(i => i.c === c));
+  if (!aEnviar.length) return;
+
+  // ── Envío con espaciado de 90 s ─────────────────────────────────────────
+  // Registrar en panel.db al enviar
+  let panelDb;
+  try { panelDb = require('/root/ponexo-root/node_modules/better-sqlite3')('/root/ponexo-root/panel.db'); } catch {}
+  const registrarEnvio = panelDb ? panelDb.prepare(`
+    INSERT OR IGNORE INTO prospectos (proyecto, nombre, zona, dominio, url, correo, tipo_campana,
+      dato_duro, rendimiento, lcp, estado, enviado_at, resend_id, giro, asunto, cuerpo_preview, cuerpo_html, creado_at, actualizado_at)
+    VALUES ('creativa-balam', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'enviado', ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+  `) : null;
+  const actualizarEnvio = panelDb ? panelDb.prepare(`
+    UPDATE prospectos SET estado='enviado', enviado_at=?, resend_id=?, asunto=?, cuerpo_preview=?, cuerpo_html=?,
+      actualizado_at=datetime('now') WHERE correo=?
+  `) : null;
+
+  // Leer elegidos.json para metadata
+  let elegidosData = [];
+  try { elegidosData = JSON.parse(fs.readFileSync(path.join(DIR_HOY, 'elegidos.json'), 'utf8')); } catch {}
+
+  const apunte = t => fs.appendFileSync(LOG, `${new Date().toISOString()}  ${t}\n`);
+  for (const c of aEnviar) {
     try {
       const r = await fetch('https://api.resend.com/emails', {
         method: 'POST',
@@ -97,11 +150,29 @@ async function enviar() {
       });
       const j = await r.json();
       apunte(r.ok ? `OK    ${c.para}  id=${j.id}` : `FALLO ${c.para}  ${JSON.stringify(j)}`);
+      // Registrar en panel.db
+      if (r.ok && registrarEnvio) {
+        const eleg = elegidosData.find(e => (e.correo || '').toLowerCase() === (c.para || '').toLowerCase()) || {};
+        const dom = (c.para || '').split('@')[1] || '';
+        const preview = (c.cuerpo || '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().slice(0, 500);
+        const html = envolver(c.cuerpo || '');
+        const ts = new Date().toISOString();
+        try {
+          const res = registrarEnvio.run(eleg.nombre || dom, eleg.zona || 'desconocida', eleg.dominio || dom,
+            eleg.url || null, c.para, eleg.tipo_campana || 'sitio_lento',
+            eleg.dato_duro || null, eleg.rend || null, eleg.lcp || null,
+            ts, j.id, eleg.giro || null, c.asunto, preview, html);
+          if (res.changes === 0 && actualizarEnvio) {
+            actualizarEnvio.run(ts, j.id, c.asunto, preview, html, c.para);
+          }
+        } catch {}
+      }
     } catch (e) {
       apunte(`ERROR ${c.para}  ${e.message}`);
     }
     await new Promise(r => setTimeout(r, 90000));
   }
+  if (panelDb) try { panelDb.close(); } catch {}
 
   const ok = (fs.existsSync(LOG) ? fs.readFileSync(LOG, 'utf8').match(/OK /g) || [] : []).length;
   await notificar(`✅ <b>Prospección diaria ${HOY} enviada</b>: ${ok}/${CORREOS.length} correos.\nLog: <code>${LOG}</code>`, { html: true });

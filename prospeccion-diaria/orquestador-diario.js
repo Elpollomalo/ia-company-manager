@@ -28,6 +28,13 @@ const { registrar } = require('/root/agente-constructor/registrar-tarea');
 const Database = require('/root/ponexo-root/node_modules/better-sqlite3');
 
 const BASE = '/root/agente-constructor/prospeccion-diaria';
+
+// No mandar correos sábado ni domingo — las oficinas no trabajan y no los leen.
+const diaHoy = new Date().getDay(); // 0=domingo, 6=sábado
+if (diaHoy === 0 || diaHoy === 6) {
+  console.log(`Hoy es ${diaHoy === 0 ? 'domingo' : 'sábado'}, no se mandan correos de prospección.`);
+  process.exit(0);
+}
 const HOY = new Date().toISOString().slice(0, 10);
 
 /**
@@ -44,7 +51,7 @@ const POOL_PATH = path.join(BASE, 'pool-verificado.json');
 
 const INICIO_EVAL = '2026-08-26';
 const DIAS_APROBACION = 5;
-const CUANTOS = 4;
+const CUANTOS = 5;
 
 /**
  * Toggle de procesamiento: cuando está en true, la redacción diaria se
@@ -63,6 +70,110 @@ function enPeriodoAprobacion() {
   return dias < DIAS_APROBACION;
 }
 
+/**
+ * elegirMezclados(pool, n) — saca n candidatos del pool, mezclando tipos.
+ *
+ * 1. Agrupa por tipo_campana (candidatos sin tipo se tratan como 'sitio_lento').
+ * 2. Round-robin: saca 1 de cada tipo disponible, repite hasta completar n.
+ * 3. Retorna los elegidos en orden de selección.
+ */
+function elegirMezclados(pool, n) {
+  // Agrupar por tipo_campana
+  const grupos = {};
+  for (const c of pool) {
+    const tipo = c.tipo_campana || 'sitio_lento';
+    if (!grupos[tipo]) grupos[tipo] = [];
+    grupos[tipo].push(c);
+  }
+
+  const tipos = Object.keys(grupos);
+  const elegidos = [];
+  let ronda = 0;
+
+  while (elegidos.length < n && tipos.length > 0) {
+    const tiposVivos = tipos.filter((t) => grupos[t].length > ronda);
+    if (tiposVivos.length === 0) break;
+    for (const tipo of tiposVivos) {
+      if (elegidos.length >= n) break;
+      elegidos.push(grupos[tipo][ronda]);
+    }
+    ronda++;
+  }
+
+  return elegidos;
+}
+
+/**
+ * Reglas de redacción específicas por tipo de campaña (sección 6 de arquitectura-campanas-v2.md).
+ */
+const REGLAS_POR_TIPO = {
+  sitio_lento: `REGLAS TIPO sitio_lento:
+- Abrir con el dato de rendimiento/LCP.
+- Si el diseño es bueno, reconocerlo antes de hablar de velocidad.
+- Ofrecer: "te muestro qué está frenando tu sitio y cómo se arregla".
+- Nunca decir "hay que rehacer el sitio" ni "es fácil de corregir".
+- Carlos lleva el estudio impreso (o comparte pantalla si es videollamada).
+- SERVICIO A OFRECER: optimización web o desarrollo nuevo.`,
+
+  invisible_google: `REGLAS TIPO invisible_google:
+- Abrir con: "busqué '{búsqueda}' y no sales en los primeros resultados".
+- Mencionar quién SÍ sale (top 3 competidores) para que sea tangible.
+- NO hablar de PageSpeed ni de velocidad: este correo es sobre visibilidad.
+- Ofrecer: "te muestro exactamente por qué no apareces y qué hay que hacer para que cuando alguien busque {giro} en {zona}, te encuentre".
+- Tono: no es un regaño, es una oportunidad perdida. "Cada día que no sales, esas búsquedas se las lleva tu competencia".
+- SERVICIO A OFRECER: posicionamiento en Google (SEO).`,
+
+  sin_ads: `REGLAS TIPO sin_ads:
+- Abrir con: "tu competidor {nombre} está invirtiendo en Google Ads para '{búsqueda}' y tú no".
+- Ser específico: nombrar al competidor y la búsqueda exacta.
+- NO hablar de SEO ni velocidad: este correo es sobre publicidad pagada.
+- Ofrecer: "te muestro cuánto invierte tu competencia y cómo puedes aparecer tú también con un presupuesto controlado".
+- Tono: urgencia competitiva. "Cada clic que se lleva tu competidor es un cliente que no te ve".
+- SERVICIO A OFRECER: gestión Google/Meta Ads.`,
+
+  sin_sitio: `REGLAS TIPO sin_sitio:
+- Abrir con: "busqué '{giro} {zona}' y tu competencia (X, Y) ya tiene presencia digital, tú todavía no".
+- No ser condescendiente. No asumir que no quieren sitio.
+- Ofrecer: "te muestro cómo sería tu sitio y qué te traería en clientes nuevos".
+- Dato concreto: mencionar competidores específicos que SÍ tienen sitio.
+- Tono: invitación, no lección. "Hoy la gente busca en Google antes de ir a cualquier lado".
+- SERVICIO A OFRECER: desarrollo web.`,
+};
+
+/**
+ * Arma la ficha descriptiva de un candidato para la instrucción de redacción,
+ * incluyendo tipo de campaña, dato_duro, y reglas específicas.
+ */
+function fichaCandiato(c, i) {
+  const tipo = c.tipo_campana || 'sitio_lento';
+  const esLocal = (c.zona || '').toLowerCase() === ZONA_LOCAL;
+  const modalidad = esLocal ? 'LOCAL, cita presencial' : 'FUERA de Cozumel, videollamada';
+
+  // Dato duro: usar campo explícito o construir desde rend/lcp (compat v1)
+  const datoDuro = c.dato_duro
+    || `tu sitio tiene ${c.rend || '?'}/100 de rendimiento y carga en ${c.lcp || '?'}s`;
+
+  // Contexto extra (si existe)
+  const ctx = c.contexto_extra || {};
+  const lineasCtx = [];
+  if (ctx.top_3) lineasCtx.push(`Competidores que SÍ salen: ${ctx.top_3.join(', ')}`);
+  if (ctx.busqueda) lineasCtx.push(`Búsqueda: "${ctx.busqueda}"`);
+  if (ctx.competidor_con_ads) lineasCtx.push(`Competidor con ads: ${ctx.competidor_con_ads} (${ctx.competidor_dominio || ''})`);
+  if (ctx.competidores_con_sitio) lineasCtx.push(`Competidores con sitio: ${ctx.competidores_con_sitio.join(', ')}`);
+
+  let ficha = `${i + 1}. ${c.nombre} (${c.zona} — ${modalidad})
+   TIPO: ${tipo}
+   DATO DURO: ${datoDuro}
+   URL: ${c.url || '(sin sitio)'}
+   CORREO: ${c.correo}`;
+
+  if (lineasCtx.length > 0) {
+    ficha += `\n   CONTEXTO: ${lineasCtx.join('. ')}`;
+  }
+
+  return ficha;
+}
+
 (async () => {
   fs.mkdirSync(DIR_HOY, { recursive: true });
 
@@ -77,9 +188,10 @@ function enPeriodoAprobacion() {
     return;
   }
 
-  // ── Tomar 4 del pool (FIFO) y sacarlos del pool ────────────────────────
-  const elegidos = pool.slice(0, CUANTOS);
-  const restante = pool.slice(CUANTOS);
+  // ── Tomar 8 del pool (mezclando tipos) y sacarlos del pool ──────────────
+  const elegidos = elegirMezclados(pool, CUANTOS);
+  const elegidosSet = new Set(elegidos.map((c) => c.correo || c.dominio || c.nombre));
+  const restante = pool.filter((c) => !elegidosSet.has(c.correo || c.dominio || c.nombre));
   fs.writeFileSync(POOL_PATH, JSON.stringify(restante, null, 2));
 
   // ── Pedir redacción, EN LA RUTA CORRECTA según quién procese ────────────
@@ -121,6 +233,12 @@ function enPeriodoAprobacion() {
       ? `· Se pide una CITA de veinte minutos EN SU LOCAL (estos negocios son de Cozumel, donde esta Carlos). Se lleva el estudio impreso Y como lo resolveria.`
       : `· Se pide una VIDEOLLAMADA de veinte minutos, NO una cita presencial: estos negocios estan fuera de Cozumel y Carlos vive en Cozumel. En la videollamada comparte pantalla con el estudio y como lo resolveria. NUNCA ofrezcas pasar a su local ni sugieras que estas cerca.`;
 
+  // Recoger los tipos presentes en el lote para incluir reglas específicas
+  const tiposPresentes = [...new Set(elegidos.map((c) => c.tipo_campana || 'sitio_lento'))];
+  const reglasEspecificas = tiposPresentes
+    .map((t) => REGLAS_POR_TIPO[t] || `REGLAS TIPO ${t}: (sin reglas específicas definidas, usar las generales)`)
+    .join('\n\n');
+
   const instrRedaccion = `Redacta ${elegidos.length} correos de prospección para Creativa Balam. NO explores el vault ni leas otras plantillas: todo lo que necesitas está aquí abajo. Ve directo a escribir el archivo.
 
 RUTA DE SALIDA (exacta, sin variaciones — ${PROCESAR_VIA_HERMES ? 'ruta absoluta del VPS' : 'relativa a tu carpeta de escritura autorizada, vault/1-desk'}):
@@ -139,8 +257,8 @@ const CORREOS = [ /* aquí van los ${elegidos.length} objetos { para, asunto, cu
 
 module.exports = { CORREOS, DE, envolver };
 
-REGLAS DE REDACCIÓN (no negociables, ya definidas por Carlos):
-· Cada correo lleva EL DATO medido de ESE negocio (rendimiento, LCP u otro dato concreto de la lista de abajo). Nada genérico.
+REGLAS DE REDACCIÓN GENERALES (no negociables, ya definidas por Carlos):
+· Cada correo lleva EL DATO medido de ESE negocio (el "dato duro" que viene en la ficha de abajo). Nada genérico.
 · Cero guiones largos (—): delatan IA.
 ${reglaCierre}
 · Nunca decir que NO hay que rehacer el sitio ni prometer alcance sin diagnóstico.
@@ -148,8 +266,12 @@ ${reglaCierre}
 · Español de México, tono directo de dueño a dueño, sin tecnicismos innecesarios.
 · Estos ${elegidos.length} negocios YA fueron verificados (correo alcanzable, nunca contactados, MX vivo) — no hace falta que lo revalides tú.
 
+REGLAS ESPECÍFICAS POR TIPO DE CAMPAÑA (cada correo sigue las reglas de SU tipo):
+
+${reglasEspecificas}
+
 Negocios de hoy (usa exactamente estos datos, no busques más):
-${elegidos.map((c, i) => `${i + 1}. ${c.nombre} (${c.zona}${(c.zona || '').toLowerCase() === ZONA_LOCAL ? ' — LOCAL, cita presencial' : ' — FUERA de Cozumel, videollamada'}) — ${c.rend}/100 rendimiento, LCP ${c.lcp || '?'}s — ${c.url} — correo: ${c.correo}`).join('\n')}
+${elegidos.map((c, i) => fichaCandiato(c, i)).join('\n---\n')}
 
 Al terminar, escribe SOLO el archivo correos.js en la ruta indicada. No hace falta bitácora extra ni explorar carpetas.${PROCESAR_VIA_HERMES ? `
 
@@ -191,13 +313,18 @@ Esto dispara el aviso de borradores por Telegram (o el envío directo si ya no e
   // de recolección. copiar-redaccion.js (corrido unos minutos después por
   // cron) mueve el archivo de vault/1-desk a prospeccion-diaria/{HOY}/.
 
-  const resumen = elegidos.map((c, i) =>
-    `${i + 1}. <b>${escaparHtml(c.nombre)}</b> (${escaparHtml(c.zona)}) ${c.rend}/100, LCP ${c.lcp || '?'}s\n   → <code>${escaparHtml(c.correo)}</code>`).join('\n');
+  const resumen = elegidos.map((c, i) => {
+    const tipo = c.tipo_campana || 'sitio_lento';
+    const datoDuroCorto = c.dato_duro
+      ? c.dato_duro.slice(0, 60) + (c.dato_duro.length > 60 ? '...' : '')
+      : `${c.rend || '?'}/100, LCP ${c.lcp || '?'}s`;
+    return `${i + 1}. <b>${escaparHtml(c.nombre)}</b> (${escaparHtml(c.zona)}) [${tipo}]\n   ${escaparHtml(datoDuroCorto)}\n   → <code>${escaparHtml(c.correo)}</code>`;
+  }).join('\n');
 
   if (enPeriodoAprobacion()) {
     fs.writeFileSync(path.join(DIR_HOY, 'estado.txt'), 'REDACTANDO');
     await notificar(
-`📋 <b>Prospección diaria ${HOY}</b> — 4 elegidos del pool verificado
+`📋 <b>Prospección diaria ${HOY}</b> — ${elegidos.length} elegidos del pool verificado
 
 ${resumen}
 

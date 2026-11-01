@@ -1,0 +1,121 @@
+{
+  "max_busquedas_por_corrida": 20,
+  "gl": "mx",
+  "hl": "es",
+  "num": 10,
+  "busquedas": [
+    {
+      "zona": "cozumel",
+      "giro": "buceo",
+      "queries": [
+        "buceo cozumel",
+        "scuba diving cozumel",
+        "dive shops cozumel mexico"
+      ]
+    },
+    {
+      "zona": "cozumel",
+      "giro": "hoteles",
+      "queries": [
+        "hoteles cozumel",
+        "hotels cozumel island"
+      ]
+    },
+    {
+      "zona": "cozumel",
+      "giro": "restaurantes",
+      "queries": [
+        "restaurantes cozumel",
+        "best restaurants cozumel"
+      ]
+    },
+    {
+      "zona": "cozumel",
+      "giro": "tours",
+      "queries": [
+        "tours cozumel",
+        "excursiones cozumel snorkel"
+      ]
+    },
+    {
+      "zona": "cozumel",
+      "giro": "renta_autos",
+      "queries": [
+        "renta de autos cozumel",
+        "car rental cozumel"
+      ]
+    },
+    {
+      "zona": "cozumel",
+      "giro": "spas",
+      "queries": [
+        "spa cozumel",
+        "spa and wellness cozumel"
+      ]
+    },
+    {
+      "zona": "cozumel",
+      "giro": "dentistas",
+      "queries": [
+        "dentista cozumel",
+        "dental clinic cozumel"
+      ]
+    },
+    {
+      "zona": "playa-del-carmen",
+      "giro": "hoteles",
+      "queries": [
+        "hoteles playa del carmen",
+        "boutique hotels playa del carmen"
+      ]
+    },
+    {
+      "zona": "playa-del-carmen",
+      "giro": "restaurantes",
+      "queries": [
+        "restaurantes playa del carmen",
+        "best restaurants playa del carmen"
+      ]
+    },
+    {
+      "zona": "playa-del-carmen",
+      "giro": "tours",
+      "queries": [
+        "tours playa del carmen",
+        "excursiones playa del carmen cenotes"
+      ]
+    },
+    {
+      "zona": "playa-del-carmen",
+      "giro": "buceo",
+      "queries": [
+        "buceo playa del carmen",
+        "scuba diving playa del carmen"
+      ]
+    },
+    {
+      "zona": "playa-del-carmen",
+      "giro": "nightlife",
+      "queries": [
+        "nightlife playa del carmen",
+        "bares quinta avenida playa del carmen"
+      ]
+    },
+    {
+      "zona": "playa-del-carmen",
+      "giro": "dentistas",
+      "queries": [
+        "dentista playa del carmen",
+        "dental tourism playa del carmen"
+      ]
+    },
+    {
+      "zona": "playa-del-carmen",
+      "giro": "bienes_raices",
+      "queries": [
+        "bienes raices playa del carmen",
+        "real estate playa del carmen"
+      ]
+    }
+  ]
+}
