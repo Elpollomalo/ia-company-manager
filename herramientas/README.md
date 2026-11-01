@@ -60,3 +60,23 @@ canales-youtube el 1 nov 2026, cuenta `elpollomalo`).
 
 Ojo con la separación de capacidades: el modelo de chat (deepseek-flash vía el
 alias `deepseek-chat`) **lee** imágenes pero no las crea. Para crear, este script.
+
+## transcribir.py — audio a texto con faster-whisper (CPU)
+
+```bash
+python3 herramientas/transcribir.py audio.mp3
+python3 herramientas/transcribir.py nota-de-voz.m4a --modelo base --idioma es
+python3 herramientas/transcribir.py video.mp4 --json salida.json --texto salida.txt
+```
+
+Corre en el **CPU del VPS** (no hay GPU), con int8. Medido el 1 nov 2026 con un
+audio de 45.8 s:
+
+| Modelo | Velocidad | Uso |
+|---|---|---|
+| `base` | **2.1x** tiempo real | rápido, bueno para español claro |
+| `small` (default) | **0.9x** tiempo real | mejor calidad, ~1 min por minuto de audio |
+
+`tiny`, `medium` y `large-v3` también están disponibles. Los modelos se bajan la
+primera vez y quedan en caché. Acepta audio y video (ffmpeg hace la conversión),
+y nombres de archivo con espacios o caracteres invisibles.
