@@ -46,3 +46,17 @@ en renglones distintos, sepáralas con una línea en blanco entre cada una.
 Chromium (ya instalado en este VPS, en `/snap/chromium/`) más las librerías del sistema que pide
 para correr headless (`libatk1.0-0`, `libnss3`, `libgbm1`, etc. — se instalaron el 14 agosto 2026).
 El script busca el binario solo; si no lo encuentra, lo dice claro en vez de fallar raro.
+
+## generar-imagen.py — imágenes con Replicate
+
+```bash
+python3 herramientas/generar-imagen.py "un faro al atardecer en Cozumel" salida.png
+python3 herramientas/generar-imagen.py "logo verde neón" logo.png --modelo flux-pro --ratio 1:1
+```
+
+Modelos: `flux-schnell` (default, 1-3 s, barato), `flux-dev`, `flux-pro`.
+Llave: `REPLICATE_API_TOKEN` en el `.env` del motor (traída del despliegue de
+canales-youtube el 1 nov 2026, cuenta `elpollomalo`).
+
+Ojo con la separación de capacidades: el modelo de chat (deepseek-flash vía el
+alias `deepseek-chat`) **lee** imágenes pero no las crea. Para crear, este script.
