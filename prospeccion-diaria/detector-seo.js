@@ -406,4 +406,7 @@ function seleccionarQueries(config) {
   console.log(`   Nuevos candidatos al pool: ${agregados}`);
   console.log(`   Pool total: ${pool.length}`);
   console.log(`   Descartados permanentes: ${Object.keys(descartados).length}`);
-})();
+})().then(
+  () => process.stdout.write('', () => process.exit(0)),
+  (err) => { console.error('[error fatal]', err); process.stdout.write('', () => process.exit(1)); }
+);

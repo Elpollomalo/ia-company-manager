@@ -279,4 +279,7 @@ Autoriza una investigación o auditoría nueva:
 o
 <code>/investigar prospección negocios {zona nueva}</code>`, { html: true });
   }
-})();
+})().then(
+  () => process.stdout.write('', () => process.exit(0)),
+  (err) => { console.error('[error fatal]', err); process.stdout.write('', () => process.exit(1)); }
+);

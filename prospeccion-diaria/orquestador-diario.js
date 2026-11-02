@@ -363,4 +363,7 @@ Responde <b>manda</b> para enviarlos o <b>pasa</b> para saltarlos hoy.`,
   } else {
     fs.writeFileSync(path.join(DIR_HOY, 'estado.txt'), 'REDACTANDO_AUTO');
   }
-})();
+})().then(
+  () => process.stdout.write('', () => process.exit(0)),
+  (err) => { console.error('[error fatal]', err); process.stdout.write('', () => process.exit(1)); }
+);

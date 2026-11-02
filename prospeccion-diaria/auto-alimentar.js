@@ -216,4 +216,7 @@ Incluye para cada negocio: nombre, URL (si tiene), correo (si lo encuentras), di
     console.error('[auto-alimentar] Error al encolar investigación:', err.message);
     await notificar(`❌ Error al encolar auto-investigación de ${giro} en ${zona}: ${err.message}`);
   }
-})();
+})().then(
+  () => process.stdout.write('', () => process.exit(0)),
+  (err) => { console.error('[error fatal]', err); process.stdout.write('', () => process.exit(1)); }
+);
