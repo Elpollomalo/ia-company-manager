@@ -25,10 +25,12 @@ const { notificar, escaparHtml } = require('/root/agente-constructor/scripts/tel
 const VAULT_AUDITORIA = '/root/agente-constructor/vault/9-auditoria-web/creativa-balam';
 const VAULT_INVESTIGACION = '/root/agente-constructor/vault/7-investigacion-mercado/creativa-balam';
 const { negociosDeTablas } = require('./lib/nombres');
+const { verificarBuzon } = require('./lib/verificar-buzon');
 const ZONAS_CONOCIDAS = ['cozumel', 'cancun', 'playa-del-carmen', 'bacalar', 'merida', 'tulum', 'progreso'];
 const BASE = '/root/agente-constructor/prospeccion-diaria';
 const POOL_PATH = path.join(BASE, 'pool-verificado.json');
 const DESCARTADOS_PATH = path.join(BASE, 'descartados-permanentes.json'); // dominios que nunca calificarán (sin MX, ya contactados, etc.) — no se re-intentan cada corrida
+const REBOTES_PATH = path.join(BASE, 'rebotes.json'); // registro permanente de rebotes
 const UMBRAL_MINIMO = (() => {
   // El umbral vive en config/zonas-giros.json para poder ajustarlo sin tocar
   // código. Antes estaba hardcodeado (12) y el archivo de config decía 20:
@@ -47,9 +49,7 @@ const UMBRAL_MINIMO = (() => {
 // Cinco Soles (un negocio, varios buzones propios). En Gmail/Hotmail "mismo
 // dominio" no significa "mismo negocio", así que ahí sólo cuenta el correo
 // exacto -- si no, ningún prospecto con correo genérico volvería a calificar.
-const GENERICOS = new Set(['gmail.com', 'googlemail.com', 'hotmail.com', 'hotmail.es', 'hotmail.com.mx',
-  'outlook.com', 'outlook.es', 'live.com', 'live.com.mx', 'yahoo.com', 'yahoo.com.mx', 'yahoo.es',
-  'icloud.com', 'me.com', 'aol.com', 'msn.com', 'proton.me', 'protonmail.com', 'gmx.com', 'mail.com']);
+const { esCompartido } = require('./lib/dominios');
 
 function leerJson(p, porDefecto) { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return porDefecto; } }
 function guardarJson(p, data) { fs.writeFileSync(p, JSON.stringify(data, null, 2)); }
@@ -183,6 +183,18 @@ async function historialResend() {
     if (j.data.length < 100) break;
     after = j.data[j.data.length - 1].id;
   }
+  // El historial de Resend caduca (~40 correos); el registro de rebotes no.
+  // Se suma para que un buzón muerto de hace tres meses siga vetado.
+  try {
+    const reg = leerJson(REBOTES_PATH, { rebotes: {} });
+    for (const r of Object.values(reg.rebotes || {})) {
+      if (!r.correo) continue;
+      const correo = r.correo.toLowerCase();
+      vistos[correo] = true;
+      const d = (r.dominio || correo.split('@')[1] || '').toLowerCase();
+      if (d && !esCompartido(d)) dominiosVistos.add(d);
+    }
+  } catch { /* si el registro no existe todavía, seguimos con Resend */ }
   return { vistos, dominiosVistos };
 }
 
@@ -225,6 +237,15 @@ async function historialResend() {
     if (!correo) { descartados[dom] = 'sin_correo_encontrado'; continue; }
     if (historial[correo.toLowerCase()]) { descartados[dom] = 'ya_contactado'; continue; }
     if (!tieneMx(dom)) { descartados[dom] = 'sin_mx'; continue; }
+    // El buzón tiene que existir de verdad (3 nov 2026): un correo publicado en
+    // el sitio puede apuntar a una cuenta que ya no vive ahí. Se pregunta por
+    // RCPT antes de meterlo al pool, no al mandar: así no se redacta un correo
+    // para un buzón muerto.
+    const rev = await verificarBuzon(correo);
+    if (rev.estado === 'inexistente' || rev.estado === 'sin_mx') {
+      descartados[dom] = `buzon_${rev.estado}`;
+      continue;
+    }
 
     pool.push({ ...n, dominio: dom, correo, agregado_al_pool: new Date().toISOString() });
     agregados++;
@@ -246,10 +267,16 @@ async function historialResend() {
       if (!n.correo) { descartados[dom] = 'sin_correo_encontrado'; continue; }
       if (historial[n.correo.toLowerCase()]) { descartados[dom] = 'ya_contactado'; continue; }
       const domCorreo = n.correo.toLowerCase().split('@')[1];
-      if (!GENERICOS.has(domCorreo) && dominiosVistos.has(domCorreo)) { descartados[dom] = 'dominio_ya_contactado'; continue; }
+      if (!esCompartido(domCorreo) && dominiosVistos.has(domCorreo)) { descartados[dom] = 'dominio_ya_contactado'; continue; }
       // El MX que importa es el del buzón al que se manda, no el del sitio web:
       // un negocio con dominio propio puede atender sólo por Gmail.
       if (!tieneMx(domCorreo)) { descartados[dom] = 'sin_mx'; continue; }
+      // Mismo candado que el primer camino: el buzón tiene que existir.
+      const rev = await verificarBuzon(n.correo);
+      if (rev.estado === 'inexistente' || rev.estado === 'sin_mx') {
+        descartados[dom] = `buzon_${rev.estado}`;
+        continue;
+      }
 
       const medida = await medirVelocidad(dom);
       medidos++;

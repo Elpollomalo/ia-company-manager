@@ -16,7 +16,9 @@ const path = require('path');
 const { notificar, escaparHtml } = require('/root/agente-constructor/scripts/telegram-notify');
 
 const BASE = '/root/agente-constructor/prospeccion-diaria';
-const HOY = new Date().toISOString().slice(0, 10);
+// PROSPECCION_DIA permite correr el envío sobre otra carpeta de día (para
+// pruebas o para reprocesar un lote). Sin la variable, es el día de hoy.
+const HOY = process.env.PROSPECCION_DIA || new Date().toISOString().slice(0, 10);
 
 // El dedup por DOMINIO existe por el caso Los Cinco Soles (un mismo negocio
 // con varios buzones propios: wecare@ y hectorh@ no deben recibir dos correos).
@@ -24,9 +26,7 @@ const HOY = new Date().toISOString().slice(0, 10);
 // negocio", y como ya se le escribió a otros prospectos en Gmail/Hotmail, todo
 // candidato nuevo con ese tipo de correo tumbaba el lote completo. Ahí el
 // dedup es sólo por correo exacto (4 septiembre 2026, antes de que pasara).
-const GENERICOS = new Set(['gmail.com', 'googlemail.com', 'hotmail.com', 'hotmail.es', 'hotmail.com.mx',
-  'outlook.com', 'outlook.es', 'live.com', 'live.com.mx', 'yahoo.com', 'yahoo.com.mx', 'yahoo.es',
-  'icloud.com', 'me.com', 'aol.com', 'msn.com', 'proton.me', 'protonmail.com', 'gmx.com', 'mail.com']);
+const { esCompartido } = require('./lib/dominios');
 const DIR_HOY = path.join(BASE, HOY);
 const CORREOS_JS = path.join(DIR_HOY, 'correos.js');
 
@@ -49,7 +49,18 @@ async function enviar() {
       .map(l => l.match(/^\S+\s+OK\s+(\S+)/)?.[1]?.toLowerCase())
       .filter(Boolean)
   );
-  const pendientes = CORREOS.filter(c => !yaEnviadosHoy.has((c.para || '').toLowerCase()));
+  // Los que se saltaron por buzón inexistente tampoco se reintentan hoy: si el
+  // buzón no existe, no va a existir dos minutos después.
+  const saltadosHoy = new Set(
+    (fs.existsSync(LOG) ? fs.readFileSync(LOG, 'utf8') : '')
+      .split('\n')
+      .map(l => l.match(/^\S+\s+SALTADO\s+(\S+)/)?.[1]?.toLowerCase())
+      .filter(Boolean)
+  );
+  const pendientes = CORREOS.filter(c => {
+    const p = (c.para || '').toLowerCase();
+    return !yaEnviadosHoy.has(p) && !saltadosHoy.has(p);
+  });
   if (!pendientes.length) {
     await notificar(`ℹ️ ${HOY}: los ${CORREOS.length} correos de hoy ya estaban enviados, nada pendiente.`);
     return;
@@ -79,7 +90,7 @@ async function enviar() {
   const choques = pendientes.filter(c => {
     const correo = (c.para || '').toLowerCase();
     const dom = correo.split('@')[1];
-    return vistos[correo] || (dom && !GENERICOS.has(dom) && dominiosVistos.has(dom));
+    return vistos[correo] || (dom && !esCompartido(dom) && dominiosVistos.has(dom));
   });
   if (choques.length) {
     await notificar(`🛑 ${HOY}: ABORTADO, ya se les escribió antes: ${choques.map(c => escaparHtml(c.para)).join(', ')}`);
@@ -110,17 +121,52 @@ async function enviar() {
 
   if (invalidos.length) {
     for (const { c, motivo } of invalidos) {
-      fs.appendFileSync(LOG, `${new Date().toISOString()}  RECHAZADO ${c.para}  ${motivo}\n`);
+      fs.appendFileSync(LOG, `${new Date().toISOString()}  RETENIDO  ${c.para}  ${motivo}\n`);
     }
     await notificar(
-      `\u26d4 <b>${HOY}: ${invalidos.length} correo(s) NO se enviaron</b> \u2014 el asunto no nombra al negocio.\n` +
+      `\u23f8\ufe0f <b>${HOY}: ${invalidos.length} correo(s) retenidos</b> \u2014 el asunto no nombra al negocio (regla anti-spam).\n` +
       invalidos.map(({ c, motivo }) => `\u2022 <code>${escaparHtml(c.para)}</code>: ${escaparHtml(motivo)}`).join('\n') +
-      `\n\nLos dem\u00e1s del lote s\u00ed se mandan.`,
+      `\n\nNo es un fallo de env\u00edo: falta corregir el asunto y reenviar ese correo. Los dem\u00e1s del lote s\u00ed salen.`,
       { html: true });
   }
 
   const aEnviar = pendientes.filter(c => !invalidos.some(i => i.c === c));
   if (!aEnviar.length) return;
+
+  // ── Candado 3: el buzón tiene que existir ────────────────────────────────
+  // 3 noviembre 2026: info@spanishschools.com.mx pasó los dos candados
+  // anteriores (estaba publicado en su sitio, el dominio tenía MX) y rebotó
+  // con 550 5.1.1: el buzón no existía. El MX sólo prueba que el dominio
+  // recibe correo, no que esa cuenta viva ahí. Se pregunta por RCPT antes de
+  // mandar: los 550 se saltan y se anotan; un 'desconocido' o 'temporal' NO
+  // se descarta (no saber no es lo mismo que saber que no existe).
+  let aSaltar = [];
+  if (process.env.SALTAR_VERIFICACION_BUZON !== '1') {
+    const { verificarBuzon } = require('./lib/verificar-buzon');
+    for (const c of aEnviar) {
+      try {
+        const v = await verificarBuzon(c.para);
+        if (v.estado === 'inexistente') {
+          aSaltar.push({ c, motivo: v.motivo });
+        }
+      } catch (e) {
+        // Si la verificación falla, se manda: no se bloquea un envío por un
+        // error nuestro de red o de DNS.
+      }
+    }
+    if (aSaltar.length) {
+      for (const { c, motivo } of aSaltar) {
+        fs.appendFileSync(LOG, `${new Date().toISOString()}  SALTADO ${c.para}  buzón inexistente (${motivo})\n`);
+      }
+      await notificar(
+        `\u{1F6AB} <b>${HOY}: ${aSaltar.length} correo(s) fuera del lote</b> \u2014 el buzón no existe.\n` +
+        aSaltar.map(({ c, motivo }) => `\u2022 <code>${escaparHtml(c.para)}</code>: ${escaparHtml(motivo.slice(0, 120))}`).join('\n') +
+        `\n\nNo se enviaron para no generar un rebote. Hay que buscar otro contacto del negocio.`,
+        { html: true });
+    }
+  }
+  const enviables = aEnviar.filter(c => !aSaltar.some(s => s.c === c));
+  if (!enviables.length) return;
 
   // ── Envío con espaciado de 90 s ─────────────────────────────────────────
   // Registrar en panel.db al enviar
@@ -141,7 +187,7 @@ async function enviar() {
   try { elegidosData = JSON.parse(fs.readFileSync(path.join(DIR_HOY, 'elegidos.json'), 'utf8')); } catch {}
 
   const apunte = t => fs.appendFileSync(LOG, `${new Date().toISOString()}  ${t}\n`);
-  for (const c of aEnviar) {
+  for (const c of enviables) {
     try {
       const r = await fetch('https://api.resend.com/emails', {
         method: 'POST',

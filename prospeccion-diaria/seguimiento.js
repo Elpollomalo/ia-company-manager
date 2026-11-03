@@ -50,18 +50,20 @@ async function sincronizar() {
   const registro = leer();
   const todos = await historialResend();
   let nuevos = 0;
+  const corregidos = [];
   for (const e of todos) {
     const para = (e.to || [])[0];
     if (!para || PROPIOS.test(para)) continue;
     const correo = para.toLowerCase();
+    const evento = e.last_event || 'sent';
     if (!registro[correo]) {
       registro[correo] = {
         correo,
         asunto: e.subject || null,
         remitente: (e.from || '').match(/<(.+)>/)?.[1] || e.from || null,
         fecha_envio: e.created_at ? e.created_at.slice(0, 10) : null,
-        estado_entrega: e.last_event || 'sent',
-        estado_embudo: e.last_event === 'bounced' ? 'rebotado' : 'enviado',
+        estado_entrega: evento,
+        estado_embudo: evento === 'bounced' ? 'rebotado' : 'enviado',
         respondio_at: null,
         cita_at: null,
         cerrado_at: null,
@@ -70,10 +72,26 @@ async function sincronizar() {
         historial: [{ fecha: new Date().toISOString(), evento: 'sincronizado_de_resend' }],
       };
       nuevos++;
+      continue;
     }
+    // Registro que ya existía: Resend sabe más que nosotros. Si el evento
+    // cambió (sent -> delivered/bounced), se corrige aquí. Antes este caso se
+    // ignoraba y un correo rebotado quedaba como "enviado" para siempre.
+    const r = registro[correo];
+    if (r.estado_entrega === evento) continue;
+    const antes = r.estado_entrega;
+    r.estado_entrega = evento;
+    if (evento === 'bounced' && r.estado_embudo === 'enviado') {
+      r.estado_embudo = 'rebotado';
+      corregidos.push(correo);
+    }
+    r.historial = r.historial || [];
+    r.historial.push({ fecha: new Date().toISOString(), evento: `entrega_${antes}_a_${evento}` });
   }
   guardar(registro);
-  console.log(`Sincronizado. ${nuevos} prospectos nuevos importados. Total en seguimiento: ${Object.keys(registro).length}.`);
+  console.log(`Sincronizado. ${nuevos} prospectos nuevos importados. ${corregidos.length} corregidos a rebotado. Total en seguimiento: ${Object.keys(registro).length}.`);
+  if (corregidos.length) console.log('Corregidos: ' + corregidos.join(', '));
+  return { nuevos, corregidos };
 }
 
 function marcar(correo, estado, opts = {}) {
@@ -146,19 +164,23 @@ function pendientes() {
   sinNovedad.forEach(r => console.log(`   - ${r.correo} (enviado ${r.fecha_envio})`));
 }
 
-(async () => {
-  const [, , cmd, ...args] = process.argv;
-  if (cmd === 'sincronizar') await sincronizar();
-  else if (cmd === 'marcar') {
-    const [correo, estado] = args;
-    const opts = {};
-    for (let i = 2; i < args.length; i++) {
-      if (args[i] === '--monto') opts.monto = args[++i];
-      if (args[i] === '--nota') opts.nota = args[++i];
+if (require.main === module) {
+  (async () => {
+    const [, , cmd, ...args] = process.argv;
+    if (cmd === 'sincronizar') await sincronizar();
+    else if (cmd === 'marcar') {
+      const [correo, estado] = args;
+      const opts = {};
+      for (let i = 2; i < args.length; i++) {
+        if (args[i] === '--monto') opts.monto = args[++i];
+        if (args[i] === '--nota') opts.nota = args[++i];
+      }
+      marcar(correo, estado, opts);
     }
-    marcar(correo, estado, opts);
-  }
-  else if (cmd === 'estadisticas') estadisticas();
-  else if (cmd === 'pendientes') pendientes();
-  else console.log('Uso: sincronizar | marcar <correo> <estado> [--monto N] [--nota "texto"] | estadisticas | pendientes');
-})();
+    else if (cmd === 'estadisticas') estadisticas();
+    else if (cmd === 'pendientes') pendientes();
+    else console.log('Uso: sincronizar | marcar <correo> <estado> [--monto N] [--nota "texto"] | estadisticas | pendientes');
+  })();
+}
+
+module.exports = { sincronizar, marcar, estadisticas, pendientes, leer, guardar };

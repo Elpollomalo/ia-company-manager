@@ -21,9 +21,7 @@ const BASE = '/root/agente-constructor/prospeccion-diaria';
 const SEGUIMIENTO = path.join(BASE, 'seguimiento.json');
 const db = new Database('/root/ponexo-root/panel.db');
 
-const GENERICOS = new Set(['gmail.com', 'googlemail.com', 'hotmail.com', 'hotmail.es', 'hotmail.com.mx',
-  'outlook.com', 'outlook.es', 'live.com', 'live.com.mx', 'yahoo.com', 'yahoo.com.mx', 'yahoo.es',
-  'icloud.com', 'me.com', 'aol.com', 'msn.com', 'proton.me', 'protonmail.com', 'gmx.com', 'mail.com', 'usa.net']);
+const { esCompartido } = require('./lib/dominios');
 
 // ── asunto por correo: seguimiento.json + correos.js de cada día ───────────
 const asuntoPorCorreo = {};
@@ -71,7 +69,7 @@ for (const f of filas) {
 
   if (!esNombreValido(f.nombre)) {
     const dom = f.dominio || '';
-    const esGenerico = !dom || GENERICOS.has(dom);
+    const esGenerico = !dom || esCompartido(dom);
     const etiqueta = esGenerico ? (f.correo || dom || 'sin identificar') : dom;
     if (etiqueta && etiqueta !== f.nombre) {
       setNombre.run(etiqueta, f.id);

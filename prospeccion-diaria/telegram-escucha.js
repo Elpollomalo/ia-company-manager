@@ -89,6 +89,9 @@ async function procesar(msg) {
   } else if (lower === '/embudo' || lower === '/estadisticas') {
     execFile('node', ['/root/agente-constructor/prospeccion-diaria/seguimiento.js', 'estadisticas'],
       (err, stdout) => { notificar(err ? `⚠️ ${err.message}` : `<pre>${escaparHtml(stdout.trim())}</pre>`, { html: true }); });
+  } else if (lower === '/rebotes') {
+    execFile('node', ['/root/agente-constructor/prospeccion-diaria/rebotes.js'], { env: { ...process.env, NODE_PATH: '/root/agente-constructor/node_modules' } },
+      (err, stdout) => { notificar(err ? `⚠️ ${err.message}` : `<pre>${escaparHtml(stdout.trim())}</pre>`, { html: true }); });
   } else if (lower === '/estado') {
     const { hoy: h, dir } = hoy();
     const estado = fs.existsSync(path.join(dir, 'estado.txt'))

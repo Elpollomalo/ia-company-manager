@@ -25,9 +25,7 @@ const VAULT_PROSPECCION = '/root/agente-constructor/vault/7-prospeccion-negocios
 const VAULT_INVESTIGACION = '/root/agente-constructor/vault/7-investigacion-mercado/creativa-balam';
 const ESTADO_PATH = path.join(BASE, 'config/estado-seo.json'); // rotación de queries
 
-const GENERICOS = new Set(['gmail.com', 'googlemail.com', 'hotmail.com', 'hotmail.es', 'hotmail.com.mx',
-  'outlook.com', 'outlook.es', 'live.com', 'live.com.mx', 'yahoo.com', 'yahoo.com.mx', 'yahoo.es',
-  'icloud.com', 'me.com', 'aol.com', 'msn.com', 'proton.me', 'protonmail.com', 'gmx.com', 'mail.com']);
+const { esCompartido } = require('./lib/dominios');
 
 function leerJson(p, def) { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return def; } }
 function guardarJson(p, d) { fs.writeFileSync(p, JSON.stringify(d, null, 2)); }
@@ -367,7 +365,7 @@ function seleccionarQueries(config) {
     if (historial[correo.toLowerCase()]) { descartados[dom] = 'ya_contactado'; continue; }
 
     const domCorreo = correo.toLowerCase().split('@')[1];
-    if (!GENERICOS.has(domCorreo) && dominiosVistos.has(domCorreo)) {
+    if (!esCompartido(domCorreo) && dominiosVistos.has(domCorreo)) {
       descartados[dom] = 'dominio_ya_contactado';
       continue;
     }

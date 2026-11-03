@@ -19,6 +19,7 @@ require('dotenv').config({ path: '/root/agente-constructor/.env' });
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
+const { esCompartido } = require('./lib/dominios');
 
 const VAULT_AUDITORIA = '/root/agente-constructor/vault/9-auditoria-web/creativa-balam';
 const SALIDA = '/root/agente-constructor/prospeccion-diaria';
@@ -109,15 +110,30 @@ async function historialResend() {
   // 2. Historial Resend
   const historial = await historialResend();
 
+  // Registro permanente de rebotes: el historial de Resend sólo alcanza los
+  // últimos ~40 correos; rebotes.json no caduca. De ahí salen los dominios que
+  // no vuelven a entrar (sólo dominios de empresa: en un dominio compartido se
+  // bloquea la dirección, no el dominio).
+  const reg = (() => { try { return JSON.parse(fs.readFileSync(path.join(__dirname, 'rebotes.json'), 'utf8')); } catch { return { rebotes: {} }; } })();
+  const rebotesDominio = new Set(Object.values(reg.rebotes || {}).map(r => r.dominio).filter(d => d && !esCompartido(d)));
+
   // 3. Filtros
   const candidatos = [];
   const descartados = { contactados: [], rebotados: [], sin_mx: [], buen_estado: [], sin_correo_en_informe: [] };
   for (const [dom, n] of Object.entries(porDominio)) {
     const h = historial[dom]; // match por dominio: cualquier correo del mismo dominio cuenta
     const correosDominio = Object.keys(historial).filter(e => e.endsWith('@' + dom));
-    if (correosDominio.length) {
-      const algunoRebote = correosDominio.some(e => historial[e].estado === 'bounced');
+    const compartido = esCompartido(dom);
+    if (correosDominio.length && !compartido) {
+      const algunoRebote = correosDominio.some(e => ['bounced', 'suppressed', 'complained'].includes(historial[e].estado))
+        || rebotesDominio.has(dom);
       (algunoRebote ? descartados.rebotados : descartados.contactados).push(`${n.nombre} (${dom})`);
+      continue;
+    }
+    if (correosDominio.length && compartido) {
+      // Dominio compartido: que un buzón haya rebotado no cierra el dominio.
+      // El bloqueo real de esa dirección se hace en pool-diario, ya con el correo.
+      descartados.contactados.push(`${n.nombre} (${dom})`);
       continue;
     }
     const esCaso = n.rend < 65 || (n.lcp && n.lcp > 6);
